@@ -184,4 +184,13 @@ function setupIpcHandlers() {
     dbService.setSetting(key, value);
     return true;
   });
+
+  // Excluded extensions & DB cleanup
+  ipcMain.handle('exclusions:get', async () => {
+    return dbService.getExcludedExtensions();
+  });
+
+  ipcMain.handle('exclusions:set', async (event, extensions) => {
+    return dbService.setExcludedExtensions(extensions);
+  });
 }

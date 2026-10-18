@@ -7,6 +7,7 @@ import ShareStatsView from './components/ShareStatsView';
 import ScanModal from './components/ScanModal';
 import ScanChoiceModal from './components/ScanChoiceModal';
 import DeleteConfirmModal from './components/DeleteConfirmModal';
+import ExcludedExtensionsModal from './components/ExcludedExtensionsModal';
 import { formatBytes } from './utils/formatters';
 
 export default function App() {
@@ -16,6 +17,7 @@ export default function App() {
 
   // Duplicates state
   const [activeScope, setActiveScope] = useState('ALL'); // 'ALL' | 'CROSS_DIRECTORY' | 'SAME_DIRECTORY'
+  const [filterLocationId, setFilterLocationId] = useState(null); // Filter duplicate groups by specific share/location
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('wasted_space');
   const [page, setPage] = useState(0);
@@ -58,6 +60,10 @@ export default function App() {
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  // Excluded Extensions State
+  const [excludedExtensions, setExcludedExtensions] = useState(['xmp']);
+  const [isExclusionsModalOpen, setIsExclusionsModalOpen] = useState(false);
+
   // Load locations on start
   const loadLocations = useCallback(async () => {
     if (!window.api) return;
@@ -79,9 +85,22 @@ export default function App() {
     }
   }, []);
 
+  const loadExclusions = useCallback(async () => {
+    if (!window.api?.getExcludedExtensions) return;
+    try {
+      const exts = await window.api.getExcludedExtensions();
+      if (Array.isArray(exts)) {
+        setExcludedExtensions(exts);
+      }
+    } catch (err) {
+      console.error('Failed to load excluded extensions:', err);
+    }
+  }, []);
+
   useEffect(() => {
     loadLocations();
-  }, [loadLocations]);
+    loadExclusions();
+  }, [loadLocations, loadExclusions]);
 
   // Listen to scan progress events
   useEffect(() => {
@@ -125,6 +144,7 @@ export default function App() {
     try {
       const result = await window.api.findDuplicates(activeLocationIds, {
         scope: activeScope,
+        filterLocationId,
         search: searchQuery,
         sortBy,
         limit: pageSize,
@@ -134,7 +154,7 @@ export default function App() {
     } catch (err) {
       console.error('Failed to find duplicates:', err);
     }
-  }, [activeLocationIds, activeScope, searchQuery, sortBy, page, pageSize]);
+  }, [activeLocationIds, activeScope, filterLocationId, searchQuery, sortBy, page, pageSize]);
 
   // Fetch stats for all locations
   const refreshStats = useCallback(async () => {
@@ -198,8 +218,20 @@ export default function App() {
 
     await window.api.removeLocation(locationId);
     setActiveLocationIds(prev => prev.filter(id => id !== locationId));
+    if (filterLocationId === locationId) {
+      setFilterLocationId(null);
+    }
     setSelectedFileIds(new Set());
     await loadLocations();
+  };
+
+  const handleFilterLocationDuplicates = (locationId) => {
+    if (locationId && !activeLocationIds.includes(locationId)) {
+      setActiveLocationIds(prev => [...prev, locationId]);
+    }
+    setFilterLocationId(locationId);
+    setActiveTab('DUPLICATES');
+    setPage(0);
   };
 
   const executeScanLocation = async (locationId, scanMode = 'resume') => {
@@ -322,16 +354,23 @@ export default function App() {
   };
 
   const handleApplySmartSelection = async (type, targetLocationId = null, targetScope = 'ALL') => {
+    if (type === 'INVERT' && selectedFileIds.size === 0) {
+      alert('No files are currently selected to invert. Please select files or apply a Smart Select rule first.');
+      return;
+    }
+
     if (targetScope === 'ALL' && window.api?.computeSmartSelection) {
       try {
         const res = await window.api.computeSmartSelection(activeLocationIds, type, {
           targetLocationId,
+          filterLocationId,
           scope: activeScope,
-          search: searchQuery
+          search: searchQuery,
+          currentSelectedIds: Array.from(selectedFileIds)
         });
         setSelectedFileIds(new Set(res.selectedFileIds));
         alert(
-          `Smart Selection Applied Across ALL Sets!\n\n` +
+          `${type === 'INVERT' ? 'Selection Inverted' : 'Smart Selection Applied'} Across ALL Sets!\n\n` +
           `• Selected: ${res.totalSelectedCount.toLocaleString()} duplicate files for deletion\n` +
           `• Recoverable Storage: ${formatBytes(res.totalSelectedBytes)}\n` +
           `• Duplicate Sets Processed: ${res.affectedGroupsCount.toLocaleString()}`
@@ -348,6 +387,20 @@ export default function App() {
     for (const group of duplicateData.groups) {
       const files = group.files;
       if (files.length <= 1) continue;
+
+      if (type === 'INVERT') {
+        const hasSelectionInGroup = files.some(f => selectedFileIds.has(f.id));
+        if (hasSelectionInGroup) {
+          files.forEach(f => {
+            if (selectedFileIds.has(f.id)) {
+              nextSelected.delete(f.id);
+            } else {
+              nextSelected.add(f.id);
+            }
+          });
+        }
+        continue;
+      }
 
       let keptFile = null;
 
@@ -385,16 +438,29 @@ export default function App() {
         }
       } else if (type === 'KEEP_FIRST') {
         keptFile = files[0];
+      } else if (type === 'KEEP_SECOND') {
+        keptFile = files[1] || files[0];
       } else if (type === 'KEEP_LOCATION' && targetLocationId) {
         const inTarget = files.filter(f => f.location_id === targetLocationId);
         if (inTarget.length > 0) {
-          keptFile = inTarget.reduce((b, f) => (f.mtime > b.mtime ? f : b), inTarget[0]);
+          keptFile = inTarget.reduce((b, f) => ((f.depth || 0) > (b.depth || 0) || ((f.depth || 0) === (b.depth || 0) && f.mtime > b.mtime) ? f : b), inTarget[0]);
+        }
+      } else if (type === 'KEEP_OTHER_LOCATIONS' && targetLocationId) {
+        const outsideTarget = files.filter(f => f.location_id !== targetLocationId);
+        if (outsideTarget.length > 0) {
+          keptFile = outsideTarget.reduce((b, f) => ((f.depth || 0) > (b.depth || 0) || ((f.depth || 0) === (b.depth || 0) && f.mtime > b.mtime) ? f : b), outsideTarget[0]);
+        } else {
+          keptFile = files.reduce((b, f) => ((f.depth || 0) > (b.depth || 0) || ((f.depth || 0) === (b.depth || 0) && f.mtime > b.mtime) ? f : b), files[0]);
         }
       }
 
       if (keptFile) {
         files.forEach(f => {
-          if (f.id !== keptFile.id) nextSelected.add(f.id);
+          if (f.id === keptFile.id) {
+            nextSelected.delete(f.id);
+          } else {
+            nextSelected.add(f.id);
+          }
         });
       }
     }
@@ -443,6 +509,32 @@ export default function App() {
     if (window.api) window.api.openFile(filePath);
   };
 
+  const handleSaveExclusions = async (nextExtensions) => {
+    if (!window.api?.setExcludedExtensions) return null;
+    try {
+      const res = await window.api.setExcludedExtensions(nextExtensions);
+      if (res && Array.isArray(res.excludedExtensions)) {
+        setExcludedExtensions(res.excludedExtensions);
+      }
+      setSelectedFileIds(new Set());
+      await loadLocations();
+      await refreshDuplicates();
+      await refreshStats();
+      return res;
+    } catch (err) {
+      alert(`Failed to update excluded extensions: ${err.message}`);
+      return null;
+    }
+  };
+
+  const handleQuickExcludeExtension = async (ext) => {
+    if (!ext) return;
+    const normalized = String(ext).trim().toLowerCase().replace(/^\./, '');
+    if (!normalized) return;
+    const nextList = Array.from(new Set([...excludedExtensions, normalized]));
+    await handleSaveExclusions(nextList);
+  };
+
   // Calculate selected files volume and involved locations
   const selectedStats = useMemo(() => {
     let bytes = 0;
@@ -479,6 +571,8 @@ export default function App() {
         onTabChange={setActiveTab}
         scanThreads={scanThreads}
         onScanThreadsChange={setScanThreads}
+        excludedExtensions={excludedExtensions}
+        onOpenExclusions={() => setIsExclusionsModalOpen(true)}
       />
 
       {/* Main Body per Tab */}
@@ -489,6 +583,11 @@ export default function App() {
             activeScope={activeScope}
             onScopeChange={(scope) => {
               setActiveScope(scope);
+              setPage(0);
+            }}
+            filterLocation={locations.find(l => l.id === filterLocationId)}
+            onClearLocationFilter={() => {
+              setFilterLocationId(null);
               setPage(0);
             }}
           />
@@ -504,6 +603,14 @@ export default function App() {
               setActiveScope(scope);
               setPage(0);
             }}
+            filterLocationId={filterLocationId}
+            onFilterLocationChange={(locId) => {
+              if (locId && !activeLocationIds.includes(locId)) {
+                setActiveLocationIds(prev => [...prev, locId]);
+              }
+              setFilterLocationId(locId);
+              setPage(0);
+            }}
             searchQuery={searchQuery}
             onSearchChange={(q) => {
               setSearchQuery(q);
@@ -515,6 +622,7 @@ export default function App() {
               setPage(0);
             }}
             locations={locations.filter(l => activeLocationIds.includes(l.id))}
+            allLocations={locations}
             selectedFileIds={selectedFileIds}
             onToggleFileSelection={handleToggleFileSelection}
             onApplySmartSelection={handleApplySmartSelection}
@@ -523,6 +631,7 @@ export default function App() {
             onRevealExplorer={handleRevealExplorer}
             onOpenFile={handleOpenFile}
             onDeleteSingleFile={handleDeleteSingleFile}
+            onExcludeExtension={handleQuickExcludeExtension}
           />
         </div>
       )}
@@ -541,6 +650,7 @@ export default function App() {
           stats={statsData}
           onScanLocation={handleScanLocation}
           onRemoveLocation={handleRemoveLocation}
+          onFilterDuplicates={handleFilterLocationDuplicates}
           isScanning={isScanning}
         />
       )}
@@ -568,6 +678,13 @@ export default function App() {
         reclaimedBytes={selectedStats.bytes}
         involvedLocations={selectedStats.locations}
         isDeleting={isDeleting}
+      />
+
+      <ExcludedExtensionsModal
+        isOpen={isExclusionsModalOpen}
+        onClose={() => setIsExclusionsModalOpen(false)}
+        excludedExtensions={excludedExtensions}
+        onSaveExclusions={handleSaveExclusions}
       />
     </div>
   );

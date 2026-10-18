@@ -87,6 +87,7 @@ function getDirectoryInsight(files, locationsInvolved) {
 function findDuplicates(locationIds = [], options = {}) {
   const {
     scope = 'ALL', // 'ALL' | 'CROSS_DIRECTORY' | 'SAME_DIRECTORY'
+    filterLocationId = null,
     search = '',
     minSize = 0,
     sortBy = 'wasted_space', // 'wasted_space' | 'file_size' | 'duplicate_count' | 'file_name'
@@ -95,10 +96,18 @@ function findDuplicates(locationIds = [], options = {}) {
     offset = 0
   } = options;
 
-  let activeIds = locationIds;
+  const targetFilterLocId = (filterLocationId !== null && filterLocationId !== undefined && filterLocationId !== '')
+    ? Number(filterLocationId)
+    : null;
+
+  let activeIds = [...locationIds];
   if (!activeIds || activeIds.length === 0) {
     const locs = dbService.queryAll('SELECT id FROM locations WHERE is_active = 1');
     activeIds = locs.map(l => l.id);
+  }
+
+  if (targetFilterLocId && !activeIds.includes(targetFilterLocId)) {
+    activeIds.push(targetFilterLocId);
   }
 
   if (activeIds.length === 0) {
@@ -124,11 +133,17 @@ function findDuplicates(locationIds = [], options = {}) {
   const idPlaceholders = activeIds.map(() => '?').join(',');
 
   // Get total scanned stats across selected locations
-  const scanTotals = dbService.queryOne(`
+  let scanTotalsQuery = `
     SELECT COUNT(*) as total_files, COALESCE(SUM(file_size), 0) as total_size
     FROM files
     WHERE location_id IN (${idPlaceholders})
-  `, activeIds) || { total_files: 0, total_size: 0 };
+  `;
+  let scanTotalsParams = [...activeIds];
+  if (targetFilterLocId) {
+    scanTotalsQuery += ` AND location_id = ?`;
+    scanTotalsParams.push(targetFilterLocId);
+  }
+  const scanTotals = dbService.queryOne(scanTotalsQuery, scanTotalsParams) || { total_files: 0, total_size: 0 };
 
   // Find all candidate (file_size, quick_hash) groups with > 1 copy
   let candidateQuery = `
@@ -142,8 +157,12 @@ function findDuplicates(locationIds = [], options = {}) {
       AND file_size > ?
     GROUP BY file_size, quick_hash
     HAVING COUNT(*) > 1
+    ${targetFilterLocId ? 'AND SUM(CASE WHEN location_id = ? THEN 1 ELSE 0 END) > 0' : ''}
   `;
   const candidateParams = [...activeIds, minSize];
+  if (targetFilterLocId) {
+    candidateParams.push(targetFilterLocId);
+  }
 
   const allCandidates = dbService.queryAll(candidateQuery, candidateParams);
 
@@ -282,7 +301,7 @@ function findDuplicates(locationIds = [], options = {}) {
     JOIN locations l ON f.location_id = l.id
     WHERE f.location_id IN (${idPlaceholders})
       AND (${conditionParts.join(' OR ')})
-    ORDER BY f.file_size DESC, f.mtime DESC
+    ORDER BY f.file_size DESC, f.mtime DESC, f.id ASC
   `;
 
   const fileRows = dbService.queryAll(filesSql, queryParams);
@@ -557,21 +576,33 @@ function getLocationsStats(locationIds = []) {
  * Compute smart file selection for deletion across ALL duplicate candidate groups in SQLite.
  * Executes in < 1 second even across 50,000+ duplicate groups.
  * @param {number[]} locationIds
- * @param {string} ruleType 'KEEP_DEEPEST' | 'KEEP_SHALLOWEST' | 'KEEP_NEWEST' | 'KEEP_OLDEST' | 'KEEP_LOCATION' | 'KEEP_FIRST'
+ * @param {string} ruleType 'KEEP_DEEPEST' | 'KEEP_SHALLOWEST' | 'KEEP_NEWEST' | 'KEEP_OLDEST' | 'KEEP_LOCATION' | 'KEEP_FIRST' | 'KEEP_SECOND' | 'INVERT'
  * @param {object} options
  */
 function computeSmartSelection(locationIds = [], ruleType = 'KEEP_DEEPEST', options = {}) {
   const {
     targetLocationId = null,
+    filterLocationId = null,
     scope = 'ALL',
     search = '',
-    minSize = 0
+    minSize = 0,
+    currentSelectedIds = []
   } = options;
 
-  let activeIds = locationIds;
+  const currentSelectedSet = new Set((currentSelectedIds || []).map(Number));
+
+  const targetFilterLocId = (filterLocationId !== null && filterLocationId !== undefined && filterLocationId !== '')
+    ? Number(filterLocationId)
+    : null;
+
+  let activeIds = [...locationIds];
   if (!activeIds || activeIds.length === 0) {
     const locs = dbService.queryAll('SELECT id FROM locations WHERE is_active = 1');
     activeIds = locs.map(l => l.id);
+  }
+
+  if (targetFilterLocId && !activeIds.includes(targetFilterLocId)) {
+    activeIds.push(targetFilterLocId);
   }
 
   if (activeIds.length === 0) {
@@ -596,8 +627,13 @@ function computeSmartSelection(locationIds = [], ruleType = 'KEEP_DEEPEST', opti
       AND file_size > ?
     GROUP BY file_size, quick_hash
     HAVING COUNT(*) > 1
+    ${targetFilterLocId ? 'AND SUM(CASE WHEN location_id = ? THEN 1 ELSE 0 END) > 0' : ''}
   `;
-  const candidates = dbService.queryAll(candSql, [...activeIds, minSize]);
+  const candParams = [...activeIds, minSize];
+  if (targetFilterLocId) {
+    candParams.push(targetFilterLocId);
+  }
+  const candidates = dbService.queryAll(candSql, candParams);
 
   // Filter candidates by Scope
   let filtered = candidates;
@@ -636,7 +672,7 @@ function computeSmartSelection(locationIds = [], ruleType = 'KEEP_DEEPEST', opti
   // Build candidate set for fast lookup
   const candidateKeys = new Set(filtered.map(c => `${c.file_size}_${c.quick_hash}`));
 
-  // Fetch all duplicate files matching active locations
+  // Fetch all duplicate files matching active locations in the exact same order as findDuplicates
   const filesSql = `
     WITH dup_keys AS (
       SELECT file_size, quick_hash
@@ -651,6 +687,7 @@ function computeSmartSelection(locationIds = [], ruleType = 'KEEP_DEEPEST', opti
     FROM files f
     JOIN dup_keys dk ON f.file_size = dk.file_size AND f.quick_hash = dk.quick_hash
     WHERE f.location_id IN (${idPlaceholders})
+    ORDER BY f.file_size DESC, f.mtime DESC, f.id ASC
   `;
   const allDupFiles = dbService.queryAll(filesSql, [...activeIds, minSize, ...activeIds]);
 
@@ -671,6 +708,24 @@ function computeSmartSelection(locationIds = [], ruleType = 'KEEP_DEEPEST', opti
 
   for (const [key, files] of groupsMap) {
     if (files.length <= 1) continue;
+
+    if (ruleType === 'INVERT') {
+      const hasSelectedInGroup = files.some(f => currentSelectedSet.has(f.id));
+      if (hasSelectedInGroup) {
+        let invertedAny = false;
+        for (const f of files) {
+          if (!currentSelectedSet.has(f.id)) {
+            selectedFileIds.push(f.id);
+            totalSelectedBytes += f.file_size;
+            invertedAny = true;
+          }
+        }
+        if (invertedAny || hasSelectedInGroup) {
+          affectedGroupsCount++;
+        }
+      }
+      continue;
+    }
 
     let keptFile = null;
 
@@ -711,10 +766,39 @@ function computeSmartSelection(locationIds = [], ruleType = 'KEEP_DEEPEST', opti
     } else if (ruleType === 'KEEP_LOCATION' && targetLocationId) {
       const inTarget = files.filter(f => f.location_id === Number(targetLocationId));
       if (inTarget.length > 0) {
-        keptFile = inTarget.reduce((best, f) => (f.mtime > best.mtime ? f : best), inTarget[0]);
+        keptFile = inTarget.reduce((best, f) => {
+          const depthF = (f.relative_path.match(/[/\\]/g) || []).length;
+          const depthB = (best.relative_path.match(/[/\\]/g) || []).length;
+          if (depthF > depthB) return f;
+          if (depthF === depthB && f.mtime > best.mtime) return f;
+          return best;
+        }, inTarget[0]);
+      }
+    } else if (ruleType === 'KEEP_OTHER_LOCATIONS' && targetLocationId) {
+      const targetId = Number(targetLocationId);
+      const outsideTarget = files.filter(f => f.location_id !== targetId);
+      if (outsideTarget.length > 0) {
+        keptFile = outsideTarget.reduce((best, f) => {
+          const depthF = (f.relative_path.match(/[/\\]/g) || []).length;
+          const depthB = (best.relative_path.match(/[/\\]/g) || []).length;
+          if (depthF > depthB) return f;
+          if (depthF === depthB && f.mtime > best.mtime) return f;
+          return best;
+        }, outsideTarget[0]);
+      } else {
+        // If all copies in group are in target location, keep deepest/newest to avoid deleting all copies
+        keptFile = files.reduce((best, f) => {
+          const depthF = (f.relative_path.match(/[/\\]/g) || []).length;
+          const depthB = (best.relative_path.match(/[/\\]/g) || []).length;
+          if (depthF > depthB) return f;
+          if (depthF === depthB && f.mtime > best.mtime) return f;
+          return best;
+        }, files[0]);
       }
     } else if (ruleType === 'KEEP_FIRST') {
       keptFile = files[0];
+    } else if (ruleType === 'KEEP_SECOND') {
+      keptFile = files[1] || files[0];
     }
 
     if (keptFile) {

@@ -12,7 +12,8 @@ import {
   Layers,
   Sparkles,
   Zap,
-  PlayCircle
+  PlayCircle,
+  Filter
 } from 'lucide-react';
 import { formatBytes, formatDate } from '../utils/formatters';
 
@@ -29,7 +30,9 @@ export default function Header({
   activeTab,
   onTabChange,
   scanThreads = 4,
-  onScanThreadsChange
+  onScanThreadsChange,
+  excludedExtensions = [],
+  onOpenExclusions
 }) {
   const [editingId, setEditingId] = useState(null);
   const [editLabel, setEditLabel] = useState('');
@@ -112,6 +115,23 @@ export default function Header({
 
         {/* Action Buttons */}
         <div className="flex items-center gap-2.5">
+          {/* Excluded Extensions Button */}
+          <button
+            type="button"
+            onClick={onOpenExclusions}
+            className="flex items-center gap-1.5 bg-slate-950/80 hover:bg-slate-800 px-2.5 py-1.5 rounded-lg border border-slate-800 hover:border-indigo-500/40 text-xs text-slate-300 transition-colors"
+            title="Edit excluded file extensions (automatically cleans database on add)"
+          >
+            <Filter className="w-3.5 h-3.5 text-indigo-400" />
+            <span className="text-[11px] text-slate-400">Excluded:</span>
+            <span className="font-mono font-semibold text-indigo-300 max-w-[140px] truncate">
+              {excludedExtensions.length === 0
+                ? 'None'
+                : excludedExtensions.slice(0, 3).map(e => (e.includes('.') ? e : `.${e}`)).join(', ') +
+                  (excludedExtensions.length > 3 ? ` +${excludedExtensions.length - 3}` : '')}
+            </span>
+          </button>
+
           {/* Thread Selector */}
           <div className="flex items-center gap-1.5 bg-slate-950/80 px-2.5 py-1.5 rounded-lg border border-slate-800 text-xs text-slate-300">
             <Zap className="w-3.5 h-3.5 text-amber-400" />

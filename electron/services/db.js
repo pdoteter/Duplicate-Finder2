@@ -90,6 +90,7 @@ async function initDatabase(storageDir) {
     CREATE INDEX IF NOT EXISTS idx_files_quickhash ON files(quick_hash);
     CREATE INDEX IF NOT EXISTS idx_files_fullhash ON files(full_hash);
     CREATE INDEX IF NOT EXISTS idx_files_size_hash ON files(file_size, quick_hash);
+    CREATE INDEX IF NOT EXISTS idx_files_ext ON files(file_extension);
   `);
 
   // Safe migrations for existing databases
@@ -102,6 +103,10 @@ async function initDatabase(storageDir) {
   try {
     db.run("ALTER TABLE locations ADD COLUMN scan_status TEXT DEFAULT 'not_scanned';");
   } catch (_) {}
+
+  // Ensure default excluded extensions (.xmp) exist and clean existing database records
+  const currentExcluded = getExcludedExtensions();
+  cleanExcludedFilesFromDb(currentExcluded);
 
   saveDatabase();
   return db;
@@ -312,6 +317,99 @@ function setSetting(key, value) {
   scheduleSave();
 }
 
+// Excluded extensions management & automatic DB cleanup
+function normalizeExcludedEntry(entry) {
+  if (!entry || typeof entry !== 'string') return '';
+  return entry
+    .trim()
+    .toLowerCase()
+    .replace(/^\*\./, '')
+    .replace(/^\./, '');
+}
+
+function getExcludedExtensions() {
+  const raw = getSetting('excluded_extensions', null);
+  if (raw === null) {
+    const defaults = ['xmp'];
+    setSetting('excluded_extensions', JSON.stringify(defaults));
+    return defaults;
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return Array.from(new Set(parsed.map(normalizeExcludedEntry).filter(Boolean)));
+    }
+  } catch (_) {}
+  // Fallback if stored as comma-separated string
+  return Array.from(
+    new Set(
+      String(raw)
+        .split(/[,;\s]+/)
+        .map(normalizeExcludedEntry)
+        .filter(Boolean)
+    )
+  );
+}
+
+function cleanExcludedFilesFromDb(extensions = []) {
+  if (!db) return { removedFilesCount: 0, removedBytes: 0 };
+  const normalized = Array.from(new Set((extensions || []).map(normalizeExcludedEntry).filter(Boolean)));
+  if (normalized.length === 0) {
+    return { removedFilesCount: 0, removedBytes: 0 };
+  }
+
+  const placeholders = normalized.map(() => '?').join(',');
+  const params = [...normalized, ...normalized];
+
+  const stats = queryOne(
+    `SELECT COUNT(*) as count, COALESCE(SUM(file_size), 0) as size
+     FROM files
+     WHERE LOWER(file_extension) IN (${placeholders})
+        OR LOWER(file_name) IN (${placeholders})`,
+    params
+  ) || { count: 0, size: 0 };
+
+  if (stats.count > 0) {
+    execute(
+      `DELETE FROM files
+       WHERE LOWER(file_extension) IN (${placeholders})
+          OR LOWER(file_name) IN (${placeholders})`,
+      params
+    );
+
+    // Recalculate total_files and total_size for all locations so UI counts remain accurate
+    execute(`
+      UPDATE locations
+      SET total_files = (SELECT COUNT(*) FROM files WHERE files.location_id = locations.id),
+          total_size = (SELECT COALESCE(SUM(file_size), 0) FROM files WHERE files.location_id = locations.id)
+    `);
+
+    saveDatabase();
+  }
+
+  return {
+    removedFilesCount: stats.count || 0,
+    removedBytes: stats.size || 0
+  };
+}
+
+function setExcludedExtensions(extensions = []) {
+  const list = Array.isArray(extensions)
+    ? extensions
+    : String(extensions || '').split(/[,;\s]+/);
+
+  const normalized = Array.from(new Set(list.map(normalizeExcludedEntry).filter(Boolean)));
+  setSetting('excluded_extensions', JSON.stringify(normalized));
+
+  const cleanupResult = cleanExcludedFilesFromDb(normalized);
+  saveDatabase();
+
+  return {
+    excludedExtensions: normalized,
+    ...cleanupResult
+  };
+}
+
 module.exports = {
   initDatabase,
   saveDatabase,
@@ -332,5 +430,8 @@ module.exports = {
   getIgnoredFiles,
   getSetting,
   setSetting,
+  getExcludedExtensions,
+  setExcludedExtensions,
+  cleanExcludedFilesFromDb,
   getDb: () => db
 };

@@ -21,7 +21,10 @@ import {
   FolderTree,
   GitCompare,
   Copy,
-  Layers
+  Layers,
+  HardDrive,
+  ArrowLeftRight,
+  X
 } from 'lucide-react';
 import { formatBytes, formatDate } from '../utils/formatters';
 
@@ -33,11 +36,14 @@ export default function DuplicateGroupsList({
   onPageChange,
   activeScope = 'ALL',
   onScopeChange,
+  filterLocationId = null,
+  onFilterLocationChange,
   searchQuery = '',
   onSearchChange,
   sortBy = 'wasted_space',
   onSortChange,
   locations = [],
+  allLocations = [],
   selectedFileIds = new Set(),
   onToggleFileSelection,
   onApplySmartSelection,
@@ -45,13 +51,17 @@ export default function DuplicateGroupsList({
   onOpenDeleteModal,
   onRevealExplorer,
   onOpenFile,
-  onDeleteSingleFile
+  onDeleteSingleFile,
+  onExcludeExtension
 }) {
   const [collapsedGroups, setCollapsedGroups] = useState(new Set());
   const [compareCollapsedGroups, setCompareCollapsedGroups] = useState(new Set());
   const [selectedShareForSmart, setSelectedShareForSmart] = useState('');
   const [smartTarget, setSmartTarget] = useState('ALL'); // 'ALL' | 'PAGE'
   const [copiedPaths, setCopiedPaths] = useState({});
+
+  const availableLocations = (allLocations && allLocations.length > 0) ? allLocations : locations;
+  const filteredLocation = availableLocations.find(l => l.id === filterLocationId);
 
   const totalPages = Math.ceil(totalGroups / pageSize);
 
@@ -159,7 +169,16 @@ export default function DuplicateGroupsList({
     } else if (type === 'KEEP_LOCATION' && targetArg) {
       const inTarget = files.filter(f => f.location_id === targetArg);
       if (inTarget.length > 0) {
-        const best = inTarget.reduce((b, f) => (f.mtime > b.mtime ? f : b), inTarget[0]);
+        const best = inTarget.reduce((b, f) => ((f.depth || 0) > (b.depth || 0) || ((f.depth || 0) === (b.depth || 0) && f.mtime > b.mtime) ? f : b), inTarget[0]);
+        fileIdToKeep = best.id;
+      }
+    } else if (type === 'KEEP_OTHER_LOCATIONS' && targetArg) {
+      const outsideTarget = files.filter(f => f.location_id !== targetArg);
+      if (outsideTarget.length > 0) {
+        const best = outsideTarget.reduce((b, f) => ((f.depth || 0) > (b.depth || 0) || ((f.depth || 0) === (b.depth || 0) && f.mtime > b.mtime) ? f : b), outsideTarget[0]);
+        fileIdToKeep = best.id;
+      } else {
+        const best = files.reduce((b, f) => ((f.depth || 0) > (b.depth || 0) || ((f.depth || 0) === (b.depth || 0) && f.mtime > b.mtime) ? f : b), files[0]);
         fileIdToKeep = best.id;
       }
     }
@@ -243,6 +262,34 @@ export default function DuplicateGroupsList({
             >
               Same-Share Only
             </button>
+          </div>
+
+          {/* Share Filter Dropdown */}
+          <div className="flex items-center gap-1.5 text-xs bg-slate-950 px-2.5 py-1.5 rounded-lg border border-slate-800 shrink-0">
+            <HardDrive className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+            <span className="text-slate-400 font-medium">Share:</span>
+            <select
+              value={filterLocationId || ''}
+              onChange={(e) => onFilterLocationChange && onFilterLocationChange(e.target.value ? Number(e.target.value) : null)}
+              className="bg-transparent text-slate-200 font-semibold text-xs focus:outline-none cursor-pointer max-w-[170px] truncate"
+              title="Filter duplicate sets involving a specific monitored share"
+            >
+              <option value="" className="bg-slate-900 text-slate-300">All Shares ({availableLocations.length})</option>
+              {availableLocations.map(l => (
+                <option key={l.id} value={l.id} className="bg-slate-900 text-slate-200">
+                  {l.label || l.path}
+                </option>
+              ))}
+            </select>
+            {filterLocationId && (
+              <button
+                onClick={() => onFilterLocationChange && onFilterLocationChange(null)}
+                className="text-slate-400 hover:text-white transition-colors ml-0.5"
+                title="Clear share filter"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
 
           {/* Search Bar */}
@@ -364,6 +411,23 @@ export default function DuplicateGroupsList({
               Keep 1st Copy
             </button>
 
+            <button
+              onClick={() => onApplySmartSelection('KEEP_SECOND', null, smartTarget)}
+              className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs rounded-md border border-slate-700 transition-colors"
+              title="Marks all copies except the second copy in each group"
+            >
+              Keep 2nd Copy
+            </button>
+
+            <button
+              onClick={() => onApplySmartSelection('INVERT', null, smartTarget)}
+              className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs rounded-md border border-slate-700 transition-colors flex items-center gap-1"
+              title="Inverts the current selection in each duplicate group (swaps kept and selected copies)"
+            >
+              <ArrowLeftRight className="w-3 h-3 text-indigo-400" />
+              Invert Selection
+            </button>
+
             {selectedFileIds.size > 0 && (
               <button
                 onClick={onClearSelection}
@@ -404,6 +468,70 @@ export default function DuplicateGroupsList({
             </button>
           </div>
         </div>
+
+        {/* Row 3: Dedicated Share Filter & Decision Assistant Banner */}
+        {filteredLocation && (
+          <div className="pt-2.5 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-3 bg-slate-950/60 p-3 rounded-xl border border-indigo-500/30 shadow-inner">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <span
+                className="w-3 h-3 rounded-full shrink-0 shadow-sm"
+                style={{ backgroundColor: filteredLocation.color || '#6366f1' }}
+              />
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-bold text-white">
+                    Filtering Share:
+                  </span>
+                  <span className="text-xs font-bold text-indigo-300 px-2 py-0.5 rounded-md bg-indigo-950/90 border border-indigo-600/50">
+                    {filteredLocation.label || filteredLocation.path}
+                  </span>
+                  <span className="text-[11px] text-slate-400">
+                    • {totalGroups.toLocaleString()} duplicate sets
+                  </span>
+                </div>
+                <div className="text-[10px] text-slate-400 font-mono truncate max-w-lg mt-0.5" title={filteredLocation.path}>
+                  {filteredLocation.path}
+                </div>
+              </div>
+            </div>
+
+            {/* Quick-decision assistants for this share */}
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="text-[11px] text-slate-400 font-semibold mr-1 flex items-center gap-1">
+                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                Decide copies:
+              </span>
+              <button
+                onClick={() => onApplySmartSelection('KEEP_LOCATION', filteredLocation.id, smartTarget)}
+                className="px-2.5 py-1 bg-emerald-950/90 hover:bg-emerald-900 text-emerald-200 text-xs rounded-lg border border-emerald-600/60 transition-colors flex items-center gap-1.5 font-medium shadow-sm"
+                title={`Keep copies in "${filteredLocation.label || filteredLocation.path}" and mark duplicate copies in other shares for deletion`}
+              >
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Keep in {filteredLocation.label || 'This Share'}</span>
+              </button>
+
+              {availableLocations.length > 1 && (
+                <button
+                  onClick={() => onApplySmartSelection('KEEP_OTHER_LOCATIONS', filteredLocation.id, smartTarget)}
+                  className="px-2.5 py-1 bg-rose-950/80 hover:bg-rose-900 text-rose-200 text-xs rounded-lg border border-rose-800/60 transition-colors flex items-center gap-1.5 font-medium shadow-sm"
+                  title={`Keep copies in other shares and mark duplicate copies in "${filteredLocation.label || filteredLocation.path}" for deletion`}
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                  <span>Clean {filteredLocation.label || 'This Share'}</span>
+                </button>
+              )}
+
+              <button
+                onClick={() => onFilterLocationChange && onFilterLocationChange(null)}
+                className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded-lg border border-slate-700 transition-colors flex items-center gap-1 ml-1"
+                title="View duplicates across all shares"
+              >
+                <X className="w-3 h-3 text-slate-400" />
+                <span>Clear Filter</span>
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Main Groups List Scroll Area */}
@@ -463,6 +591,22 @@ export default function DuplicateGroupsList({
                         <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700 font-mono">
                           {formatBytes(group.fileSize)}
                         </span>
+                        {onExcludeExtension && group.files?.[0]?.file_extension && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const ext = group.files[0].file_extension.toLowerCase();
+                              if (confirm(`Exclude all ".${ext}" files and remove them from the database?`)) {
+                                onExcludeExtension(ext);
+                              }
+                            }}
+                            title={`Exclude all .${group.files[0].file_extension} files and clean them from the database`}
+                            className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800/80 hover:bg-rose-950/70 text-slate-400 hover:text-rose-300 border border-slate-700/70 hover:border-rose-700/60 font-mono transition-colors"
+                          >
+                            Exclude .{group.files[0].file_extension}
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -524,6 +668,15 @@ export default function DuplicateGroupsList({
                       className="flex items-center gap-1 pl-2 border-l border-slate-800"
                       onClick={(e) => e.stopPropagation()}
                     >
+                      {filterLocationId && group.locationsInvolved.includes(filterLocationId) && (
+                        <button
+                          onClick={() => handleGroupAction(group, 'KEEP_LOCATION', filterLocationId)}
+                          className="px-2 py-0.5 bg-indigo-950 hover:bg-indigo-900 text-indigo-300 border border-indigo-700/70 text-[10px] rounded transition-colors font-semibold"
+                          title={`Keep copy in ${filteredLocation?.label || 'filtered share'} and delete other copies`}
+                        >
+                          Keep in {filteredLocation?.label || 'Share'}
+                        </button>
+                      )}
                       {group.maxDepth > group.minDepth && (
                         <button
                           onClick={() => handleGroupAction(group, 'KEEP_DEEPEST')}
@@ -649,14 +802,17 @@ export default function DuplicateGroupsList({
                                     <td className="py-2 pr-3 align-top">
                                       <div className="flex flex-col gap-0.5">
                                         <span
-                                          className="px-2 py-0.5 rounded text-[10px] font-semibold w-fit border"
+                                          className="px-2 py-0.5 rounded text-[10px] font-semibold w-fit border inline-flex items-center gap-1"
                                           style={{
                                             backgroundColor: `${file.location_color || '#6366f1'}20`,
                                             borderColor: `${file.location_color || '#6366f1'}50`,
                                             color: file.location_color || '#a5b4fc'
                                           }}
                                         >
-                                          {file.location_label || file.location_path}
+                                          <span>{file.location_label || file.location_path}</span>
+                                          {file.location_id === filterLocationId && (
+                                            <span className="px-1 py-0.2 rounded bg-indigo-500/30 text-indigo-200 text-[9px] font-bold">Filtered</span>
+                                          )}
                                         </span>
                                         <span className="font-mono text-[10px] text-slate-400 truncate max-w-[140px]" title={file.location_path}>
                                           {file.location_path}
@@ -830,7 +986,7 @@ export default function DuplicateGroupsList({
 
                               {/* Share Badge */}
                               <span
-                                className="px-2 py-0.5 rounded text-[10px] font-semibold shrink-0 border"
+                                className="px-2 py-0.5 rounded text-[10px] font-semibold shrink-0 border inline-flex items-center gap-1"
                                 style={{
                                   backgroundColor: `${file.location_color || '#6366f1'}20`,
                                   borderColor: `${file.location_color || '#6366f1'}50`,
@@ -838,7 +994,10 @@ export default function DuplicateGroupsList({
                                 }}
                                 title={file.location_path}
                               >
-                                {file.location_label || file.location_path}
+                                <span>{file.location_label || file.location_path}</span>
+                                {file.location_id === filterLocationId && (
+                                  <span className="px-1 py-0.2 rounded bg-indigo-500/30 text-indigo-200 text-[9px] font-bold">Filtered</span>
+                                )}
                               </span>
 
                               {/* Directory Path and Filename clearly separated */}

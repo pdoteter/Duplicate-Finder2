@@ -103,6 +103,7 @@ async function scanLocation(locationId, rootPath, onProgress = () => {}, compute
 
   // Handle Scan Mode (Fresh Rescan vs Resume)
   const customQuarantineSetting = (dbService.getSetting('quarantine_folder_name', '_duplicates_trash') || '').toLowerCase().trim();
+  const excludedExtensions = new Set(dbService.getExcludedExtensions());
   const existingFilesSet = new Set();
   let totalFiles = 0;
   let totalBytes = 0;
@@ -238,6 +239,12 @@ async function scanLocation(locationId, rootPath, onProgress = () => {}, compute
           }
           dirQueue.push(relPath);
         } else if (entry.isFile()) {
+          const ext = path.extname(entry.name).toLowerCase().replace(/^\./, '');
+          const lowerFileName = entry.name.toLowerCase();
+          if (excludedExtensions.has(ext) || excludedExtensions.has(lowerFileName)) {
+            continue;
+          }
+
           const normalizedRelPath = relPath.replace(/\\/g, '/');
 
           // If resuming and this file is already indexed, skip it immediately!

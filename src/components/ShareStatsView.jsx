@@ -15,6 +15,7 @@ export default function ShareStatsView({
   stats = [],
   onScanLocation,
   onRemoveLocation,
+  onFilterDuplicates,
   isScanning
 }) {
   const totalStorage = stats.reduce((sum, s) => sum + s.totalBytes, 0);
@@ -103,10 +104,20 @@ export default function ShareStatsView({
                   </div>
 
                   {/* Actions & Last Scanned */}
-                  <div className="flex items-center gap-3 text-xs">
+                  <div className="flex items-center gap-2.5 text-xs">
                     <span className="text-slate-400">
                       Indexed: {formatDate(share.lastScannedAt)}
                     </span>
+                    {(share.duplicateBytes > 0 || share.duplicateFiles > 0) && (
+                      <button
+                        onClick={() => onFilterDuplicates && onFilterDuplicates(share.id)}
+                        className="px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition-all shadow-sm shadow-indigo-600/30 flex items-center gap-1.5"
+                        title={`Filter and decide duplicate copies for ${share.label || share.path}`}
+                      >
+                        <Layers className="w-3.5 h-3.5 text-indigo-200" />
+                        <span>Filter Duplicates</span>
+                      </button>
+                    )}
                     <button
                       onClick={() => onScanLocation(share.id)}
                       disabled={isScanning}
@@ -134,7 +145,19 @@ export default function ShareStatsView({
                       Total: {formatBytes(share.totalBytes)} ({share.totalFiles.toLocaleString()} files)
                     </span>
                     <div className="flex items-center gap-4 text-[11px]">
-                      <span className="text-rose-400 flex items-center gap-1">
+                      <span
+                        onClick={() => {
+                          if ((share.duplicateBytes > 0 || share.duplicateFiles > 0) && onFilterDuplicates) {
+                            onFilterDuplicates(share.id);
+                          }
+                        }}
+                        className={`text-rose-400 flex items-center gap-1 ${
+                          (share.duplicateBytes > 0 || share.duplicateFiles > 0)
+                            ? 'cursor-pointer hover:text-rose-300 hover:underline'
+                            : ''
+                        }`}
+                        title={(share.duplicateBytes > 0 || share.duplicateFiles > 0) ? `Click to filter and resolve duplicates for ${share.label || share.path}` : undefined}
+                      >
                         <span className="w-2 h-2 rounded-full bg-rose-500" />
                         {dupPercent}% Duplicates ({formatBytes(share.duplicateBytes)})
                       </span>
@@ -147,9 +170,18 @@ export default function ShareStatsView({
 
                   <div className="w-full h-2.5 bg-slate-950 rounded-full overflow-hidden flex border border-slate-800">
                     <div
-                      className="bg-rose-500 transition-all duration-300"
+                      onClick={() => {
+                        if ((share.duplicateBytes > 0 || share.duplicateFiles > 0) && onFilterDuplicates) {
+                          onFilterDuplicates(share.id);
+                        }
+                      }}
+                      className={`bg-rose-500 transition-all duration-300 ${
+                        (share.duplicateBytes > 0 || share.duplicateFiles > 0)
+                          ? 'cursor-pointer hover:brightness-125'
+                          : ''
+                      }`}
                       style={{ width: `${dupPercent}%` }}
-                      title={`Duplicates: ${dupPercent}%`}
+                      title={(share.duplicateBytes > 0 || share.duplicateFiles > 0) ? `Duplicates: ${dupPercent}% (${formatBytes(share.duplicateBytes)}) - Click to filter and resolve` : `Duplicates: ${dupPercent}%`}
                     />
                     <div
                       className="bg-emerald-500 transition-all duration-300"

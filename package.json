@@ -10,7 +10,8 @@
     "start": "electron .",
     "test": "node verify-multi-directory-duplicates.js",
     "test:threads": "node verify-thread-scan-enhancement.js",
-    "test:compare": "node verify-directory-comparison-feature.js"
+    "test:compare": "node verify-directory-comparison-feature.js",
+    "test:filter": "node verify-share-filter-and-selection.js"
   },
   "keywords": [
     "backup",

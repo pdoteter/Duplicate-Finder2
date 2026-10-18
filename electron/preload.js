@@ -37,7 +37,9 @@ contextBridge.exposeInMainWorld('api', {
   revealInExplorer: (filePath) => ipcRenderer.invoke('file:reveal-explorer', filePath),
   openFile: (filePath) => ipcRenderer.invoke('file:open', filePath),
   
-  // Settings
+  // Settings & Exclusions
   getSetting: (key, defaultValue) => ipcRenderer.invoke('settings:get', key, defaultValue),
-  setSetting: (key, value) => ipcRenderer.invoke('settings:set', key, value)
+  setSetting: (key, value) => ipcRenderer.invoke('settings:set', key, value),
+  getExcludedExtensions: () => ipcRenderer.invoke('exclusions:get'),
+  setExcludedExtensions: (extensions) => ipcRenderer.invoke('exclusions:set', extensions)
 });
