@@ -90,7 +90,7 @@ function findDuplicates(locationIds = [], options = {}) {
     filterLocationId = null,
     search = '',
     minSize = 0,
-    sortBy = 'wasted_space', // 'wasted_space' | 'file_size' | 'duplicate_count' | 'file_name'
+    sortBy = 'wasted_space', // 'wasted_space' | 'file_size' | 'duplicate_count' | 'file_name' | 'directory'
     sortOrder = 'desc',
     limit = 50,
     offset = 0
@@ -234,6 +234,51 @@ function findDuplicates(locationIds = [], options = {}) {
     filtered = filtered.filter(c => matchingGroups.has(`${c.file_size}_${c.quick_hash}`));
   }
 
+  // If sorting by directory, populate the first entry's directory for each candidate group
+  if (sortBy === 'directory' && filtered.length > 0) {
+    const firstEntriesRows = dbService.queryAll(`
+      WITH dup_keys AS (
+        SELECT file_size, quick_hash
+        FROM files
+        WHERE location_id IN (${idPlaceholders})
+          AND quick_hash IS NOT NULL
+          AND file_size > ?
+        GROUP BY file_size, quick_hash
+        HAVING COUNT(*) > 1
+      ),
+      ranked AS (
+        SELECT f.file_size, f.quick_hash, f.relative_path, f.file_name,
+               l.path as location_path, l.label as location_label,
+               ROW_NUMBER() OVER (PARTITION BY f.file_size, f.quick_hash ORDER BY f.mtime DESC, f.id ASC) as rn
+        FROM files f
+        JOIN dup_keys dk ON f.file_size = dk.file_size AND f.quick_hash = dk.quick_hash
+        JOIN locations l ON f.location_id = l.id
+        WHERE f.location_id IN (${idPlaceholders})
+      )
+      SELECT file_size, quick_hash, relative_path, file_name, location_path, location_label
+      FROM ranked
+      WHERE rn = 1
+    `, [...activeIds, minSize, ...activeIds]);
+
+    const firstEntryMap = new Map();
+    for (const row of firstEntriesRows) {
+      const key = `${row.file_size}_${row.quick_hash}`;
+      const dirInfo = parseDirectoryInfo(row.relative_path);
+      firstEntryMap.set(key, {
+        dirPath: dirInfo.dirPath,
+        location: row.location_label || row.location_path || '',
+        fileName: row.file_name || ''
+      });
+    }
+
+    for (const c of filtered) {
+      const info = firstEntryMap.get(`${c.file_size}_${c.quick_hash}`);
+      c.first_dir = info ? info.dirPath : '';
+      c.first_location = info ? info.location : '';
+      c.first_file_name = info ? info.fileName : (c.sample_name || '');
+    }
+  }
+
   // Sort groups
   filtered.sort((a, b) => {
     let diff = 0;
@@ -247,6 +292,14 @@ function findDuplicates(locationIds = [], options = {}) {
       diff = b.cnt - a.cnt;
     } else if (sortBy === 'file_name') {
       diff = (a.sample_name || '').localeCompare(b.sample_name || '');
+    } else if (sortBy === 'directory') {
+      diff = (a.first_dir || '').localeCompare(b.first_dir || '');
+      if (diff === 0) {
+        diff = (a.first_location || '').localeCompare(b.first_location || '');
+      }
+      if (diff === 0) {
+        diff = (a.first_file_name || '').localeCompare(b.first_file_name || '');
+      }
     }
 
     if (sortOrder === 'asc') {

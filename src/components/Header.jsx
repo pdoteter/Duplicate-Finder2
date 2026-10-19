@@ -13,7 +13,9 @@ import {
   Sparkles,
   Zap,
   PlayCircle,
-  Filter
+  Filter,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import { formatBytes, formatDate } from '../utils/formatters';
 
@@ -36,6 +38,7 @@ export default function Header({
 }) {
   const [editingId, setEditingId] = useState(null);
   const [editLabel, setEditLabel] = useState('');
+  const [isDirectoriesCollapsed, setIsDirectoriesCollapsed] = useState(false);
 
   const allSelected = locations.length > 0 && locations.every(l => activeLocationIds.includes(l.id));
 
@@ -171,12 +174,23 @@ export default function Header({
       </div>
 
       {/* Directory Chips & Filter Bar */}
-      <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-3">
-        <div className="flex items-center justify-between mb-2">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-              Monitored Directories ({locations.length})
-            </span>
+      <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl px-3 py-2.5">
+        <div className={`flex items-center justify-between gap-2 ${!isDirectoriesCollapsed ? 'mb-2' : ''}`}>
+          <div className="flex items-center gap-2 min-w-0 flex-wrap">
+            <button
+              type="button"
+              onClick={() => setIsDirectoriesCollapsed(prev => !prev)}
+              className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
+              title={isDirectoriesCollapsed ? 'Expand monitored directories' : 'Collapse monitored directories'}
+            >
+              {isDirectoriesCollapsed ? (
+                <ChevronDown className="w-4 h-4 text-indigo-400 shrink-0" />
+              ) : (
+                <ChevronUp className="w-4 h-4 text-indigo-400 shrink-0" />
+              )}
+              <span>Monitored Directories ({locations.length})</span>
+            </button>
+
             {locations.length > 1 && (
               <button
                 onClick={handleToggleAll}
@@ -186,23 +200,57 @@ export default function Header({
                 {allSelected ? 'Deselect All' : 'Select All'}
               </button>
             )}
+
+            {isDirectoriesCollapsed && locations.length > 0 && (
+              <div className="flex items-center gap-1.5 ml-2 flex-wrap">
+                {locations.map(loc => {
+                  const isActive = activeLocationIds.includes(loc.id);
+                  const color = loc.color || '#6366f1';
+                  return (
+                    <button
+                      key={loc.id}
+                      type="button"
+                      onClick={() => onToggleLocation(loc.id, !isActive)}
+                      title={`${loc.path} (${isActive ? 'Active - click to disable' : 'Inactive - click to enable'})`}
+                      className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] border transition-all ${
+                        isActive
+                          ? 'bg-slate-900 border-slate-700 text-slate-200'
+                          : 'bg-slate-950/40 border-slate-800/50 text-slate-500 opacity-60 hover:opacity-90'
+                      }`}
+                    >
+                      <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: color }} />
+                      <span className="truncate max-w-[110px]">{loc.label || loc.path}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
-          <div className="flex items-center gap-3 text-[11px] text-slate-400">
+          <div className="flex items-center gap-3 text-[11px] text-slate-400 shrink-0">
             <div className="flex items-center gap-1">
               <Database className="w-3 h-3 text-emerald-400" />
               <span>Offline SQLite Cache</span>
             </div>
             <span>•</span>
             <span>{activeLocationIds.length} active in comparison</span>
+            <button
+              type="button"
+              onClick={() => setIsDirectoriesCollapsed(prev => !prev)}
+              className="text-slate-400 hover:text-slate-200 p-0.5 rounded hover:bg-slate-800/60 transition-colors"
+              title={isDirectoriesCollapsed ? 'Show directory cards' : 'Hide directory cards'}
+            >
+              {isDirectoriesCollapsed ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronUp className="w-3.5 h-3.5" />}
+            </button>
           </div>
         </div>
 
-        {locations.length === 0 ? (
-          <div className="py-4 text-center text-xs text-slate-500 border border-dashed border-slate-800 rounded-lg">
-            No directories added yet. Click <span className="text-indigo-400 font-semibold cursor-pointer" onClick={onAddLocation}>"Add Directory / Share"</span> to begin comparing your network drives or folders.
-          </div>
-        ) : (
+        {!isDirectoriesCollapsed && (
+          locations.length === 0 ? (
+            <div className="py-4 text-center text-xs text-slate-500 border border-dashed border-slate-800 rounded-lg">
+              No directories added yet. Click <span className="text-indigo-400 font-semibold cursor-pointer" onClick={onAddLocation}>"Add Directory / Share"</span> to begin comparing your network drives or folders.
+            </div>
+          ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2.5">
             {locations.map((loc) => {
               const isActive = activeLocationIds.includes(loc.id);
@@ -292,6 +340,7 @@ export default function Header({
               );
             })}
           </div>
+          )
         )}
       </div>
     </header>

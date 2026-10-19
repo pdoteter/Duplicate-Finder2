@@ -138,6 +138,18 @@ async function runVerification() {
   }
   console.log('✓ Successfully verified KEEP_DEEPEST keeps the organized project folder copy and selects loose root duplicates!');
 
+  // Test 5: Sorting by directory using the first entry of each group
+  console.log('\n--- Test 5: Testing findDuplicates with sortBy: "directory" ---');
+  const sortedByDir = comparator.findDuplicates([loc1.id, loc2.id, loc3.id], { sortBy: 'directory' });
+  const firstEntryDirs = sortedByDir.groups.map(g => g.files[0].dirPath || '');
+  console.log('Sorted group first-entry directories:', firstEntryDirs);
+  for (let i = 1; i < firstEntryDirs.length; i++) {
+    if (firstEntryDirs[i - 1].localeCompare(firstEntryDirs[i]) > 0) {
+      throw new Error(`Groups not sorted by first entry directory: "${firstEntryDirs[i - 1]}" came before "${firstEntryDirs[i]}"`);
+    }
+  }
+  console.log('✓ Successfully verified duplicate groups sort by the directory of their first entry!');
+
   // Clean up
   dbService.closeDatabase();
   try {

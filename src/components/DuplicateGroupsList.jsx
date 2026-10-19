@@ -316,6 +316,7 @@ export default function DuplicateGroupsList({
               <option value="file_size">File Size (Largest first)</option>
               <option value="duplicate_count">Duplicate Copies Count</option>
               <option value="file_name">File Name (A-Z)</option>
+              <option value="directory">Directory (A-Z)</option>
             </select>
           </div>
         </div>
