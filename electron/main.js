@@ -158,6 +158,23 @@ function setupIpcHandlers() {
     return comparator.computeSmartSelection(locationIds, ruleType, options);
   });
 
+  // Ignored Duplicate Sets
+  ipcMain.handle('duplicates:ignore-set', async (event, fileSize, quickHash, fileName) => {
+    return dbService.ignoreSet(fileSize, quickHash, fileName);
+  });
+
+  ipcMain.handle('duplicates:unignore-set', async (event, fileSize, quickHash) => {
+    return dbService.unignoreSet(fileSize, quickHash);
+  });
+
+  ipcMain.handle('duplicates:clear-ignored-sets', async () => {
+    return dbService.clearIgnoredSets();
+  });
+
+  ipcMain.handle('duplicates:get-ignored-sets', async () => {
+    return dbService.getIgnoredSets();
+  });
+
   // File operations & Trashing
   ipcMain.handle('duplicates:delete-single', async (event, fileId, options) => {
     return await fileOps.deleteFile(fileId, options);

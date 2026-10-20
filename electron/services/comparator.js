@@ -166,8 +166,29 @@ function findDuplicates(locationIds = [], options = {}) {
 
   const allCandidates = dbService.queryAll(candidateQuery, candidateParams);
 
-  // Compute aggregate statistics across ALL groups
-  let totalGroups = allCandidates.length;
+  // Load ignored sets
+  const ignoredRows = dbService.queryAll('SELECT file_size, quick_hash FROM ignored_sets');
+  const ignoredKeysSet = new Set(ignoredRows.map(r => `${r.file_size}_${r.quick_hash}`));
+
+  const activeCandidates = [];
+  const ignoredCandidates = [];
+  for (const c of allCandidates) {
+    const key = `${c.file_size}_${c.quick_hash}`;
+    if (ignoredKeysSet.has(key)) {
+      ignoredCandidates.push(c);
+    } else {
+      activeCandidates.push(c);
+    }
+  }
+
+  let ignoredGroups = ignoredCandidates.length;
+  let ignoredWastedBytes = 0;
+  for (const c of ignoredCandidates) {
+    ignoredWastedBytes += (c.cnt - 1) * c.file_size;
+  }
+
+  // Compute aggregate statistics across ALL active (non-ignored) groups
+  let totalGroups = activeCandidates.length;
   let totalDuplicateFiles = 0;
   let totalWastedBytes = 0;
   let crossDirectoryGroups = 0;
@@ -179,7 +200,7 @@ function findDuplicates(locationIds = [], options = {}) {
   let rootVsSubfolderGroups = 0;
   let rootVsSubfolderWastedBytes = 0;
 
-  for (const c of allCandidates) {
+  for (const c of activeCandidates) {
     const wasted = (c.cnt - 1) * c.file_size;
     totalDuplicateFiles += (c.cnt - 1);
     totalWastedBytes += wasted;
@@ -204,7 +225,7 @@ function findDuplicates(locationIds = [], options = {}) {
   }
 
   // Filter candidates by Scope
-  let filtered = allCandidates;
+  let filtered = scope === 'IGNORED' ? [...ignoredCandidates] : [...activeCandidates];
   if (scope === 'CROSS_DIRECTORY') {
     filtered = filtered.filter(c => c.loc_cnt > 1);
   } else if (scope === 'SAME_DIRECTORY') {
@@ -327,7 +348,9 @@ function findDuplicates(locationIds = [], options = {}) {
         diffFolderGroups,
         diffFolderWastedBytes,
         rootVsSubfolderGroups,
-        rootVsSubfolderWastedBytes
+        rootVsSubfolderWastedBytes,
+        ignoredGroups,
+        ignoredWastedBytes
       },
       groups: [],
       totalFilteredGroups,
@@ -437,6 +460,7 @@ function findDuplicates(locationIds = [], options = {}) {
       minDepth,
       deepestFileId: deepestFile ? deepestFile.id : null,
       shallowestFileId: shallowestFile ? shallowestFile.id : null,
+      isIgnored: ignoredKeysSet.has(key),
       directoryInsight,
       files: enrichedFiles
     };
@@ -456,7 +480,9 @@ function findDuplicates(locationIds = [], options = {}) {
       diffFolderGroups,
       diffFolderWastedBytes,
       rootVsSubfolderGroups,
-      rootVsSubfolderWastedBytes
+      rootVsSubfolderWastedBytes,
+      ignoredGroups,
+      ignoredWastedBytes
     },
     groups: finalGroups,
     totalFilteredGroups,
@@ -587,6 +613,11 @@ function getLocationsStats(locationIds = []) {
     SELECT f.location_id, COUNT(*) as duplicate_files, COALESCE(SUM(f.file_size), 0) as duplicate_bytes
     FROM files f
     WHERE f.location_id IN (${idPlaceholders})
+      AND NOT EXISTS (
+        SELECT 1 FROM ignored_sets ig
+        WHERE ig.file_size = f.file_size
+          AND ig.quick_hash = f.quick_hash
+      )
       AND EXISTS (
         SELECT 1 FROM files f2
         WHERE f2.location_id IN (${idPlaceholders})
@@ -688,8 +719,14 @@ function computeSmartSelection(locationIds = [], ruleType = 'KEEP_DEEPEST', opti
   }
   const candidates = dbService.queryAll(candSql, candParams);
 
-  // Filter candidates by Scope
-  let filtered = candidates;
+  // Exclude ignored sets from smart selection
+  const ignoredRows = dbService.queryAll('SELECT file_size, quick_hash FROM ignored_sets');
+  const ignoredKeysSet = new Set(ignoredRows.map(r => `${r.file_size}_${r.quick_hash}`));
+
+  // Filter candidates by Scope (and exclude ignored sets unless specifically viewing IGNORED)
+  let filtered = scope === 'IGNORED'
+    ? candidates.filter(c => ignoredKeysSet.has(`${c.file_size}_${c.quick_hash}`))
+    : candidates.filter(c => !ignoredKeysSet.has(`${c.file_size}_${c.quick_hash}`));
   if (scope === 'CROSS_DIRECTORY') {
     filtered = filtered.filter(c => c.loc_cnt > 1);
   } else if (scope === 'SAME_DIRECTORY') {

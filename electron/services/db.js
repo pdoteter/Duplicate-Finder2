@@ -84,6 +84,15 @@ async function initDatabase(storageDir) {
       UNIQUE(backup_location_id, relative_path)
     );
 
+    CREATE TABLE IF NOT EXISTS ignored_sets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      file_size INTEGER NOT NULL,
+      quick_hash TEXT NOT NULL,
+      file_name TEXT,
+      ignored_at TEXT NOT NULL,
+      UNIQUE(file_size, quick_hash)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_files_loc ON files(location_id);
     CREATE INDEX IF NOT EXISTS idx_files_relpath ON files(location_id, relative_path);
     CREATE INDEX IF NOT EXISTS idx_files_size ON files(file_size);
@@ -91,6 +100,7 @@ async function initDatabase(storageDir) {
     CREATE INDEX IF NOT EXISTS idx_files_fullhash ON files(full_hash);
     CREATE INDEX IF NOT EXISTS idx_files_size_hash ON files(file_size, quick_hash);
     CREATE INDEX IF NOT EXISTS idx_files_ext ON files(file_extension);
+    CREATE INDEX IF NOT EXISTS idx_ignored_sets_key ON ignored_sets(file_size, quick_hash);
   `);
 
   // Safe migrations for existing databases
@@ -306,6 +316,37 @@ function getIgnoredFiles(backupLocationId) {
   );
 }
 
+// Ignored duplicate sets tracking
+function ignoreSet(fileSize, quickHash, fileName = null) {
+  if (fileSize === undefined || fileSize === null || !quickHash) return false;
+  execute(
+    'INSERT OR REPLACE INTO ignored_sets (file_size, quick_hash, file_name, ignored_at) VALUES (?, ?, ?, ?)',
+    [Number(fileSize), String(quickHash), fileName ? String(fileName) : null, new Date().toISOString()]
+  );
+  scheduleSave();
+  return true;
+}
+
+function unignoreSet(fileSize, quickHash) {
+  if (fileSize === undefined || fileSize === null || !quickHash) return false;
+  execute(
+    'DELETE FROM ignored_sets WHERE file_size = ? AND quick_hash = ?',
+    [Number(fileSize), String(quickHash)]
+  );
+  scheduleSave();
+  return true;
+}
+
+function clearIgnoredSets() {
+  execute('DELETE FROM ignored_sets');
+  scheduleSave();
+  return true;
+}
+
+function getIgnoredSets() {
+  return queryAll('SELECT * FROM ignored_sets ORDER BY ignored_at DESC');
+}
+
 // Settings
 function getSetting(key, defaultValue = null) {
   const row = queryOne('SELECT value FROM settings WHERE key = ?', [key]);
@@ -428,6 +469,10 @@ module.exports = {
   ignoreFile,
   unignoreFile,
   getIgnoredFiles,
+  ignoreSet,
+  unignoreSet,
+  clearIgnoredSets,
+  getIgnoredSets,
   getSetting,
   setSetting,
   getExcludedExtensions,

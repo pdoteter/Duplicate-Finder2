@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { 
   Search, 
   Trash2, 
@@ -24,6 +24,8 @@ import {
   Layers,
   HardDrive,
   ArrowLeftRight,
+  EyeOff,
+  RotateCcw,
   X
 } from 'lucide-react';
 import { formatBytes, formatDate } from '../utils/formatters';
@@ -31,6 +33,7 @@ import { formatBytes, formatDate } from '../utils/formatters';
 export default function DuplicateGroupsList({
   groups = [],
   totalGroups = 0,
+  summary = {},
   page = 0,
   pageSize = 50,
   onPageChange,
@@ -52,13 +55,23 @@ export default function DuplicateGroupsList({
   onRevealExplorer,
   onOpenFile,
   onDeleteSingleFile,
-  onExcludeExtension
+  onExcludeExtension,
+  onIgnoreSet,
+  onUnignoreSet,
+  onClearIgnoredSets
 }) {
   const [collapsedGroups, setCollapsedGroups] = useState(new Set());
   const [compareCollapsedGroups, setCompareCollapsedGroups] = useState(new Set());
   const [selectedShareForSmart, setSelectedShareForSmart] = useState('');
   const [smartTarget, setSmartTarget] = useState('ALL'); // 'ALL' | 'PAGE'
   const [copiedPaths, setCopiedPaths] = useState({});
+  const listContainerRef = useRef(null);
+
+  useEffect(() => {
+    if (listContainerRef.current) {
+      listContainerRef.current.scrollTop = 0;
+    }
+  }, [page, groups]);
 
   const availableLocations = (allLocations && allLocations.length > 0) ? allLocations : locations;
   const filteredLocation = availableLocations.find(l => l.id === filterLocationId);
@@ -261,6 +274,18 @@ export default function DuplicateGroupsList({
               title="Duplicate files residing within the exact same share"
             >
               Same-Share Only
+            </button>
+            <button
+              onClick={() => onScopeChange('IGNORED')}
+              className={`px-2.5 py-1 rounded font-medium transition-colors flex items-center gap-1.5 ${
+                activeScope === 'IGNORED'
+                  ? 'bg-slate-600 text-white ring-1 ring-slate-400/50'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+              title="Duplicate sets you have marked as ignored"
+            >
+              <EyeOff className="w-3.5 h-3.5" />
+              <span>Ignored ({(summary.ignoredGroups || 0).toLocaleString()})</span>
             </button>
           </div>
 
@@ -533,20 +558,69 @@ export default function DuplicateGroupsList({
             </div>
           </div>
         )}
+
+        {/* Ignored Sets Management Banner */}
+        {activeScope === 'IGNORED' && (
+          <div className="pt-2.5 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-3 bg-slate-950/60 p-3 rounded-xl border border-slate-700/60 shadow-inner">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <EyeOff className="w-4 h-4 text-slate-400 shrink-0" />
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-bold text-slate-200">
+                    Viewing Ignored Duplicate Sets ({totalGroups.toLocaleString()})
+                  </span>
+                  <span className="text-[11px] text-slate-400">
+                    • Excluded from active duplicate counts and Smart Select rules
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 text-xs">
+              {totalGroups > 0 && onClearIgnoredSets && (
+                <button
+                  onClick={() => {
+                    if (confirm(`Restore all ${totalGroups.toLocaleString()} ignored duplicate sets?`)) {
+                      onClearIgnoredSets();
+                    }
+                  }}
+                  className="px-2.5 py-1 bg-indigo-950/90 hover:bg-indigo-900 text-indigo-200 text-xs rounded-lg border border-indigo-600/60 transition-colors flex items-center gap-1.5 font-medium"
+                  title="Unignore all sets and return them to the active duplicates list"
+                >
+                  <RotateCcw className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>Restore All Ignored Sets</span>
+                </button>
+              )}
+              <button
+                onClick={() => onScopeChange('ALL')}
+                className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded-lg border border-slate-700 transition-colors flex items-center gap-1"
+              >
+                <X className="w-3 h-3 text-slate-400" />
+                <span>Back to Active Duplicates</span>
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Main Groups List Scroll Area */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+      <div ref={listContainerRef} className="flex-1 overflow-y-auto p-4 space-y-3">
         {groups.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-center">
             <div className="bg-slate-900 p-4 rounded-2xl border border-slate-800 mb-3 text-slate-400">
-              <ShieldCheck className="w-10 h-10 text-emerald-400 mx-auto" />
+              {activeScope === 'IGNORED' ? (
+                <EyeOff className="w-10 h-10 text-slate-500 mx-auto" />
+              ) : (
+                <ShieldCheck className="w-10 h-10 text-emerald-400 mx-auto" />
+              )}
             </div>
             <h3 className="text-base font-semibold text-slate-200">
-              No Duplicates Found
+              {activeScope === 'IGNORED' ? 'No Ignored Sets' : 'No Duplicates Found'}
             </h3>
             <p className="text-xs text-slate-400 mt-1 max-w-md">
-              {searchQuery
+              {activeScope === 'IGNORED'
+                ? 'You have not ignored any duplicate sets yet. Click "Ignore Set" on any duplicate group to hide it from active comparisons.'
+                : searchQuery
                 ? `No duplicates match the search "${searchQuery}". Try clearing the search query.`
                 : activeScope !== 'ALL'
                 ? `No duplicates match the scope filter. Try switching back to "All Duplicates".`
@@ -701,6 +775,30 @@ export default function DuplicateGroupsList({
                       >
                         Keep Oldest
                       </button>
+
+                      {group.isIgnored ? (
+                        onUnignoreSet && (
+                          <button
+                            onClick={() => onUnignoreSet(group)}
+                            className="px-2 py-0.5 bg-indigo-950 hover:bg-indigo-900 text-indigo-300 border border-indigo-700/70 text-[10px] rounded transition-colors flex items-center gap-1 font-medium ml-1"
+                            title="Restore this set back to active duplicate groups"
+                          >
+                            <RotateCcw className="w-3 h-3 text-indigo-400" />
+                            <span>Unignore Set</span>
+                          </button>
+                        )
+                      ) : (
+                        onIgnoreSet && (
+                          <button
+                            onClick={() => onIgnoreSet(group)}
+                            className="px-2 py-0.5 bg-slate-800/90 hover:bg-amber-950/80 text-slate-300 hover:text-amber-200 border border-slate-700 hover:border-amber-700/70 text-[10px] rounded transition-colors flex items-center gap-1 font-medium ml-1"
+                            title="Ignore this duplicate set (hides it from active duplicates and Smart Select)"
+                          >
+                            <EyeOff className="w-3 h-3 text-slate-400" />
+                            <span>Ignore Set</span>
+                          </button>
+                        )
+                      )}
                     </div>
                   </div>
                 </div>
@@ -748,6 +846,29 @@ export default function DuplicateGroupsList({
                                 </button>
                               );
                             })}
+                            {group.isIgnored ? (
+                              onUnignoreSet && (
+                                <button
+                                  onClick={() => onUnignoreSet(group)}
+                                  className="px-2 py-0.5 bg-indigo-950 hover:bg-indigo-900 text-indigo-300 border border-indigo-700/70 text-[10px] rounded transition-colors flex items-center gap-1 font-medium"
+                                  title="Restore this set back to active duplicate groups"
+                                >
+                                  <RotateCcw className="w-3 h-3 text-indigo-400" />
+                                  <span>Unignore Set</span>
+                                </button>
+                              )
+                            ) : (
+                              onIgnoreSet && (
+                                <button
+                                  onClick={() => onIgnoreSet(group)}
+                                  className="px-2 py-0.5 bg-slate-800 hover:bg-amber-950/80 text-slate-300 hover:text-amber-200 border border-slate-700 hover:border-amber-700/70 text-[10px] rounded transition-colors flex items-center gap-1"
+                                  title="Ignore this duplicate set (hides it from active duplicates and Smart Select)"
+                                >
+                                  <EyeOff className="w-3 h-3 text-slate-400" />
+                                  <span>Ignore Set</span>
+                                </button>
+                              )
+                            )}
                           </div>
                         </div>
 

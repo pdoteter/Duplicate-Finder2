@@ -27,6 +27,12 @@ contextBridge.exposeInMainWorld('api', {
   findDuplicates: (locationIds, options) => ipcRenderer.invoke('duplicates:find', locationIds, options),
   computeSmartSelection: (locationIds, ruleType, options) => 
     ipcRenderer.invoke('duplicates:smart-select-all', locationIds, ruleType, options),
+  ignoreSet: (fileSize, quickHash, fileName) => 
+    ipcRenderer.invoke('duplicates:ignore-set', fileSize, quickHash, fileName),
+  unignoreSet: (fileSize, quickHash) => 
+    ipcRenderer.invoke('duplicates:unignore-set', fileSize, quickHash),
+  clearIgnoredSets: () => ipcRenderer.invoke('duplicates:clear-ignored-sets'),
+  getIgnoredSets: () => ipcRenderer.invoke('duplicates:get-ignored-sets'),
   getUniqueFiles: (targetLocationId, compareLocationIds, options) => 
     ipcRenderer.invoke('duplicates:unique-files', targetLocationId, compareLocationIds, options),
   getLocationsStats: (locationIds) => ipcRenderer.invoke('duplicates:stats', locationIds),

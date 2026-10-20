@@ -102,26 +102,9 @@ export default function App() {
     loadExclusions();
   }, [loadLocations, loadExclusions]);
 
-  // Listen to scan progress events
-  useEffect(() => {
-    if (!window.api) return;
-    const unsubscribe = window.api.onScanProgress((data) => {
-      setScanProgress(data);
-      if (data.completed) {
-        setIsScanning(false);
-        setScanProgress(null);
-        loadLocations();
-        refreshDuplicates();
-        refreshStats();
-      }
-    });
-    return () => {
-      if (unsubscribe) unsubscribe();
-    };
-  }, [loadLocations]);
-
   // Fetch duplicates
-  const refreshDuplicates = useCallback(async () => {
+  const refreshDuplicates = useCallback(async (pageOverride = null) => {
+    const targetPage = typeof pageOverride === 'number' ? pageOverride : page;
     if (!window.api || activeLocationIds.length === 0) {
       setDuplicateData({
         summary: {
@@ -148,7 +131,7 @@ export default function App() {
         search: searchQuery,
         sortBy,
         limit: pageSize,
-        offset: page * pageSize
+        offset: targetPage * pageSize
       });
       setDuplicateData(result);
     } catch (err) {
@@ -167,6 +150,25 @@ export default function App() {
       console.error('Failed to get stats:', err);
     }
   }, [locations]);
+
+  // Listen to scan progress events
+  useEffect(() => {
+    if (!window.api) return;
+    const unsubscribe = window.api.onScanProgress((data) => {
+      setScanProgress(data);
+      if (data.completed) {
+        setIsScanning(false);
+        setScanProgress(null);
+        setPage(0);
+        loadLocations();
+        refreshDuplicates(0);
+        refreshStats();
+      }
+    });
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, [loadLocations, refreshDuplicates, refreshStats]);
 
   useEffect(() => {
     refreshDuplicates();
@@ -221,6 +223,7 @@ export default function App() {
     if (filterLocationId === locationId) {
       setFilterLocationId(null);
     }
+    setPage(0);
     setSelectedFileIds(new Set());
     await loadLocations();
   };
@@ -487,8 +490,10 @@ export default function App() {
       }
 
       setSelectedFileIds(new Set());
-      await refreshDuplicates();
+      setPage(0);
+      await refreshDuplicates(0);
       await loadLocations();
+      await refreshStats();
     } catch (err) {
       alert(`Operation error: ${err.message}`);
     } finally {
@@ -517,8 +522,9 @@ export default function App() {
         setExcludedExtensions(res.excludedExtensions);
       }
       setSelectedFileIds(new Set());
+      setPage(0);
       await loadLocations();
-      await refreshDuplicates();
+      await refreshDuplicates(0);
       await refreshStats();
       return res;
     } catch (err) {
@@ -533,6 +539,60 @@ export default function App() {
     if (!normalized) return;
     const nextList = Array.from(new Set([...excludedExtensions, normalized]));
     await handleSaveExclusions(nextList);
+  };
+
+  // Ignored Sets Handlers
+  const handleIgnoreSet = async (group) => {
+    if (!window.api?.ignoreSet || !group) return;
+    try {
+      await window.api.ignoreSet(group.fileSize, group.quickHash, group.fileName);
+      // Deselect any files in this group so they cannot be accidentally deleted
+      if (group.files && group.files.length > 0) {
+        setSelectedFileIds(prev => {
+          const next = new Set(prev);
+          for (const f of group.files) {
+            next.delete(f.id);
+          }
+          return next;
+        });
+      }
+      await refreshDuplicates();
+      if (activeTab === 'STATS') {
+        await refreshStats();
+      }
+    } catch (err) {
+      alert(`Failed to ignore set: ${err.message}`);
+    }
+  };
+
+  const handleUnignoreSet = async (group) => {
+    if (!window.api?.unignoreSet || !group) return;
+    try {
+      await window.api.unignoreSet(group.fileSize, group.quickHash);
+      await refreshDuplicates();
+      if (activeTab === 'STATS') {
+        await refreshStats();
+      }
+    } catch (err) {
+      alert(`Failed to unignore set: ${err.message}`);
+    }
+  };
+
+  const handleClearIgnoredSets = async () => {
+    if (!window.api?.clearIgnoredSets) return;
+    try {
+      await window.api.clearIgnoredSets();
+      if (activeScope === 'IGNORED') {
+        setActiveScope('ALL');
+      }
+      setPage(0);
+      await refreshDuplicates(0);
+      if (activeTab === 'STATS') {
+        await refreshStats();
+      }
+    } catch (err) {
+      alert(`Failed to restore ignored sets: ${err.message}`);
+    }
   };
 
   // Calculate selected files volume and involved locations
@@ -595,6 +655,7 @@ export default function App() {
           <DuplicateGroupsList
             groups={duplicateData.groups}
             totalGroups={duplicateData.totalFilteredGroups}
+            summary={duplicateData.summary}
             page={page}
             pageSize={pageSize}
             onPageChange={setPage}
@@ -632,6 +693,9 @@ export default function App() {
             onOpenFile={handleOpenFile}
             onDeleteSingleFile={handleDeleteSingleFile}
             onExcludeExtension={handleQuickExcludeExtension}
+            onIgnoreSet={handleIgnoreSet}
+            onUnignoreSet={handleUnignoreSet}
+            onClearIgnoredSets={handleClearIgnoredSets}
           />
         </div>
       )}
