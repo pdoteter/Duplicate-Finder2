@@ -2,7 +2,7 @@ const path = require('path');
 const dbService = require('./db');
 
 function parseDirectoryInfo(relativePath) {
-  const normalized = (relativePath || '').replace(/\\/g, '/');
+  const normalized = (relativePath || '').replace(/\\/g, '/').replace(/^\/+/, '');
   const lastSlashIndex = normalized.lastIndexOf('/');
 
   if (lastSlashIndex === -1) {
@@ -266,11 +266,20 @@ function findDuplicates(locationIds = [], options = {}) {
           AND file_size > ?
         GROUP BY file_size, quick_hash
         HAVING COUNT(*) > 1
+        ${targetFilterLocId ? 'AND SUM(CASE WHEN location_id = ? THEN 1 ELSE 0 END) > 0' : ''}
       ),
       ranked AS (
         SELECT f.file_size, f.quick_hash, f.relative_path, f.file_name,
                l.path as location_path, l.label as location_label,
-               ROW_NUMBER() OVER (PARTITION BY f.file_size, f.quick_hash ORDER BY f.mtime DESC, f.id ASC) as rn
+               ROW_NUMBER() OVER (
+                 PARTITION BY f.file_size, f.quick_hash 
+                 ORDER BY 
+                   ${targetFilterLocId ? `(CASE WHEN f.location_id = ? THEN 0 ELSE 1 END) ASC,` : ''}
+                   (CASE WHEN INSTR(f.relative_path, '/') = 0 AND INSTR(f.relative_path, char(92)) = 0 THEN 1 ELSE 0 END) ASC,
+                   f.relative_path ASC,
+                   f.mtime DESC,
+                   f.id ASC
+               ) as rn
         FROM files f
         JOIN dup_keys dk ON f.file_size = dk.file_size AND f.quick_hash = dk.quick_hash
         JOIN locations l ON f.location_id = l.id
@@ -279,7 +288,13 @@ function findDuplicates(locationIds = [], options = {}) {
       SELECT file_size, quick_hash, relative_path, file_name, location_path, location_label
       FROM ranked
       WHERE rn = 1
-    `, [...activeIds, minSize, ...activeIds]);
+    `, [
+      ...activeIds,
+      minSize,
+      ...(targetFilterLocId ? [targetFilterLocId] : []),
+      ...(targetFilterLocId ? [targetFilterLocId] : []),
+      ...activeIds
+    ]);
 
     const firstEntryMap = new Map();
     for (const row of firstEntriesRows) {
@@ -306,25 +321,27 @@ function findDuplicates(locationIds = [], options = {}) {
     if (sortBy === 'wasted_space') {
       const wastedA = (a.cnt - 1) * a.file_size;
       const wastedB = (b.cnt - 1) * b.file_size;
-      diff = wastedB - wastedA;
+      diff = sortOrder === 'asc' ? wastedA - wastedB : wastedB - wastedA;
     } else if (sortBy === 'file_size') {
-      diff = b.file_size - a.file_size;
+      diff = sortOrder === 'asc' ? a.file_size - b.file_size : b.file_size - a.file_size;
     } else if (sortBy === 'duplicate_count') {
-      diff = b.cnt - a.cnt;
+      diff = sortOrder === 'asc' ? a.cnt - b.cnt : b.cnt - a.cnt;
     } else if (sortBy === 'file_name') {
-      diff = (a.sample_name || '').localeCompare(b.sample_name || '');
+      diff = (a.sample_name || '').localeCompare(b.sample_name || '', undefined, { numeric: true, sensitivity: 'base' });
+      if (sortOrder === 'desc' && options.sortOrder === 'desc') {
+        diff = -diff;
+      }
     } else if (sortBy === 'directory') {
-      diff = (a.first_dir || '').localeCompare(b.first_dir || '');
+      diff = (a.first_dir || '').localeCompare(b.first_dir || '', undefined, { numeric: true, sensitivity: 'base' });
       if (diff === 0) {
-        diff = (a.first_location || '').localeCompare(b.first_location || '');
+        diff = (a.first_location || '').localeCompare(b.first_location || '', undefined, { numeric: true, sensitivity: 'base' });
       }
       if (diff === 0) {
-        diff = (a.first_file_name || '').localeCompare(b.first_file_name || '');
+        diff = (a.first_file_name || '').localeCompare(b.first_file_name || '', undefined, { numeric: true, sensitivity: 'base' });
       }
-    }
-
-    if (sortOrder === 'asc') {
-      diff = -diff;
+      if (sortOrder === 'desc' && options.sortOrder === 'desc') {
+        diff = -diff;
+      }
     }
     return diff;
   });
@@ -420,6 +437,22 @@ function findDuplicates(locationIds = [], options = {}) {
       };
     });
 
+    if (sortBy === 'directory') {
+      enrichedFiles.sort((a, b) => {
+        if (targetFilterLocId) {
+          const aMatch = a.location_id === targetFilterLocId ? 0 : 1;
+          const bMatch = b.location_id === targetFilterLocId ? 0 : 1;
+          if (aMatch !== bMatch) return aMatch - bMatch;
+        }
+        if (a.isRoot !== b.isRoot) return a.isRoot ? 1 : -1;
+        const dDiff = (a.dirPath || '').localeCompare(b.dirPath || '', undefined, { numeric: true, sensitivity: 'base' });
+        if (dDiff !== 0) return dDiff;
+        const locDiff = (a.location_label || '').localeCompare(b.location_label || '', undefined, { numeric: true, sensitivity: 'base' });
+        if (locDiff !== 0) return locDiff;
+        return (a.file_name || '').localeCompare(b.file_name || '', undefined, { numeric: true, sensitivity: 'base' });
+      });
+    }
+
     const locIds = Array.from(new Set(groupFiles.map(f => f.location_id)));
 
     // Find deepest and shallowest file in group
@@ -450,6 +483,8 @@ function findDuplicates(locationIds = [], options = {}) {
       quickHash: c.quick_hash,
       fileName: c.sample_name || (groupFiles[0] ? groupFiles[0].file_name : 'unknown'),
       fileCount: groupFiles.length,
+      primaryDirectory: c.first_dir || (enrichedFiles[0] ? enrichedFiles[0].dirPath : ''),
+      primaryLocation: c.first_location || (enrichedFiles[0] ? (enrichedFiles[0].location_label || enrichedFiles[0].location_path) : ''),
       wastedBytes: Math.max(0, (groupFiles.length - 1) * c.file_size),
       isCrossDirectory: c.loc_cnt > 1,
       locationsInvolved: locIds,

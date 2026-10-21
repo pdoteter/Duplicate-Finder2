@@ -660,6 +660,15 @@ export default function DuplicateGroupsList({
 
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
+                        {sortBy === 'directory' && (
+                          <div
+                            className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-indigo-950/70 border border-indigo-700/60 font-mono text-[11px] text-indigo-200"
+                            title={`Directory path (minus monitored part): ${group.primaryDirectory || '[Root]'}`}
+                          >
+                            <Folder className="w-3 h-3 text-indigo-400 shrink-0" />
+                            <span className="font-semibold">{group.primaryDirectory || '[Root]'}</span>
+                          </div>
+                        )}
                         <span className="text-xs font-semibold text-slate-100 truncate" title={group.fileName}>
                           {group.fileName}
                         </span>
