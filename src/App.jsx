@@ -36,6 +36,7 @@ export default function App() {
       sameDirectoryWastedBytes: 0
     },
     groups: [],
+    ignoredDirectories: [],
     totalFilteredGroups: 0,
     page: 0,
     pageSize: 50
@@ -595,6 +596,35 @@ export default function App() {
     }
   };
 
+  const handleIgnoreDirectory = async (locationId, dirPath) => {
+    if (!window.api?.ignoreDirectory) return;
+    try {
+      await window.api.ignoreDirectory(locationId, dirPath, activeLocationIds);
+      setSelectedFileIds(new Set());
+      await refreshDuplicates();
+      if (activeTab === 'STATS') {
+        await refreshStats();
+      }
+    } catch (err) {
+      console.error('Failed to ignore directory:', err);
+      alert(`Failed to ignore directory: ${err.message}`);
+    }
+  };
+
+  const handleUnignoreDirectory = async (locationId, dirPath) => {
+    if (!window.api?.unignoreDirectory) return;
+    try {
+      await window.api.unignoreDirectory(locationId, dirPath);
+      await refreshDuplicates();
+      if (activeTab === 'STATS') {
+        await refreshStats();
+      }
+    } catch (err) {
+      console.error('Failed to unignore directory:', err);
+      alert(`Failed to unignore directory: ${err.message}`);
+    }
+  };
+
   // Calculate selected files volume and involved locations
   const selectedStats = useMemo(() => {
     let bytes = 0;
@@ -696,6 +726,10 @@ export default function App() {
             onIgnoreSet={handleIgnoreSet}
             onUnignoreSet={handleUnignoreSet}
             onClearIgnoredSets={handleClearIgnoredSets}
+            onIgnoreDirectory={handleIgnoreDirectory}
+            onUnignoreDirectory={handleUnignoreDirectory}
+            ignoredDirectories={duplicateData.ignoredDirectories || []}
+            activeLocationIds={activeLocationIds}
           />
         </div>
       )}

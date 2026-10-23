@@ -175,6 +175,23 @@ function setupIpcHandlers() {
     return dbService.getIgnoredSets();
   });
 
+  // Ignored Directories
+  ipcMain.handle('duplicates:preview-ignore-directory', async (event, locationId, directoryPath, activeLocationIds) => {
+    return dbService.previewIgnoreDirectory(locationId, directoryPath, activeLocationIds);
+  });
+
+  ipcMain.handle('duplicates:ignore-directory', async (event, locationId, directoryPath, activeLocationIds) => {
+    return dbService.ignoreDirectory(locationId, directoryPath, activeLocationIds);
+  });
+
+  ipcMain.handle('duplicates:unignore-directory', async (event, locationId, directoryPath) => {
+    return dbService.unignoreDirectory(locationId, directoryPath);
+  });
+
+  ipcMain.handle('duplicates:get-ignored-directories', async () => {
+    return dbService.getIgnoredDirectories();
+  });
+
   // File operations & Trashing
   ipcMain.handle('duplicates:delete-single', async (event, fileId, options) => {
     return await fileOps.deleteFile(fileId, options);

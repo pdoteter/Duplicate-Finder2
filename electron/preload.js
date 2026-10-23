@@ -33,6 +33,13 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('duplicates:unignore-set', fileSize, quickHash),
   clearIgnoredSets: () => ipcRenderer.invoke('duplicates:clear-ignored-sets'),
   getIgnoredSets: () => ipcRenderer.invoke('duplicates:get-ignored-sets'),
+  previewIgnoreDirectory: (locationId, directoryPath, activeLocationIds) => 
+    ipcRenderer.invoke('duplicates:preview-ignore-directory', locationId, directoryPath, activeLocationIds),
+  ignoreDirectory: (locationId, directoryPath, activeLocationIds) => 
+    ipcRenderer.invoke('duplicates:ignore-directory', locationId, directoryPath, activeLocationIds),
+  unignoreDirectory: (locationId, directoryPath) => 
+    ipcRenderer.invoke('duplicates:unignore-directory', locationId, directoryPath),
+  getIgnoredDirectories: () => ipcRenderer.invoke('duplicates:get-ignored-directories'),
   getUniqueFiles: (targetLocationId, compareLocationIds, options) => 
     ipcRenderer.invoke('duplicates:unique-files', targetLocationId, compareLocationIds, options),
   getLocationsStats: (locationIds) => ipcRenderer.invoke('duplicates:stats', locationIds),

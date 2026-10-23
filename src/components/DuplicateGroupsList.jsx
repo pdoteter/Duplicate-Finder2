@@ -26,9 +26,11 @@ import {
   ArrowLeftRight,
   EyeOff,
   RotateCcw,
+  FolderX,
   X
 } from 'lucide-react';
 import { formatBytes, formatDate } from '../utils/formatters';
+import IgnoreDirectoryModal from './IgnoreDirectoryModal';
 
 export default function DuplicateGroupsList({
   groups = [],
@@ -58,14 +60,23 @@ export default function DuplicateGroupsList({
   onExcludeExtension,
   onIgnoreSet,
   onUnignoreSet,
-  onClearIgnoredSets
+  onClearIgnoredSets,
+  onIgnoreDirectory,
+  onUnignoreDirectory,
+  ignoredDirectories = [],
+  activeLocationIds = []
 }) {
   const [collapsedGroups, setCollapsedGroups] = useState(new Set());
   const [compareCollapsedGroups, setCompareCollapsedGroups] = useState(new Set());
   const [selectedShareForSmart, setSelectedShareForSmart] = useState('');
   const [smartTarget, setSmartTarget] = useState('ALL'); // 'ALL' | 'PAGE'
   const [copiedPaths, setCopiedPaths] = useState({});
+  const [ignoreDirModalTarget, setIgnoreDirModalTarget] = useState(null);
   const listContainerRef = useRef(null);
+
+  const handleOpenIgnoreDir = (file) => {
+    setIgnoreDirModalTarget(file);
+  };
 
   useEffect(() => {
     if (listContainerRef.current) {
@@ -561,44 +572,89 @@ export default function DuplicateGroupsList({
 
         {/* Ignored Sets Management Banner */}
         {activeScope === 'IGNORED' && (
-          <div className="pt-2.5 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-3 bg-slate-950/60 p-3 rounded-xl border border-slate-700/60 shadow-inner">
-            <div className="flex items-center gap-2.5 min-w-0">
-              <EyeOff className="w-4 h-4 text-slate-400 shrink-0" />
-              <div className="min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-xs font-bold text-slate-200">
-                    Viewing Ignored Duplicate Sets ({totalGroups.toLocaleString()})
-                  </span>
-                  <span className="text-[11px] text-slate-400">
-                    • Excluded from active duplicate counts and Smart Select rules
-                  </span>
+          <div className="pt-2.5 border-t border-slate-800/80 flex flex-col gap-2.5 bg-slate-950/60 p-3 rounded-xl border border-slate-700/60 shadow-inner">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <EyeOff className="w-4 h-4 text-slate-400 shrink-0" />
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs font-bold text-slate-200">
+                      Viewing Ignored Duplicate Sets ({totalGroups.toLocaleString()})
+                    </span>
+                    <span className="text-[11px] text-slate-400">
+                      • Excluded from active duplicate counts and Smart Select rules
+                    </span>
+                  </div>
                 </div>
+              </div>
+
+              <div className="flex items-center gap-2 text-xs">
+                {totalGroups > 0 && onClearIgnoredSets && (
+                  <button
+                    onClick={() => {
+                      if (confirm(`Restore all ${totalGroups.toLocaleString()} ignored duplicate sets and directories?`)) {
+                        onClearIgnoredSets();
+                      }
+                    }}
+                    className="px-2.5 py-1 bg-indigo-950/90 hover:bg-indigo-900 text-indigo-200 text-xs rounded-lg border border-indigo-600/60 transition-colors flex items-center gap-1.5 font-medium cursor-pointer"
+                    title="Unignore all sets and return them to the active duplicates list"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Restore All Ignored Sets</span>
+                  </button>
+                )}
+                <button
+                  onClick={() => onScopeChange('ALL')}
+                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded-lg border border-slate-700 transition-colors flex items-center gap-1 cursor-pointer"
+                >
+                  <X className="w-3 h-3 text-slate-400" />
+                  <span>Back to Active Duplicates</span>
+                </button>
               </div>
             </div>
 
-            <div className="flex items-center gap-2 text-xs">
-              {totalGroups > 0 && onClearIgnoredSets && (
-                <button
-                  onClick={() => {
-                    if (confirm(`Restore all ${totalGroups.toLocaleString()} ignored duplicate sets?`)) {
-                      onClearIgnoredSets();
-                    }
-                  }}
-                  className="px-2.5 py-1 bg-indigo-950/90 hover:bg-indigo-900 text-indigo-200 text-xs rounded-lg border border-indigo-600/60 transition-colors flex items-center gap-1.5 font-medium"
-                  title="Unignore all sets and return them to the active duplicates list"
-                >
-                  <RotateCcw className="w-3.5 h-3.5 text-indigo-400" />
-                  <span>Restore All Ignored Sets</span>
-                </button>
-              )}
-              <button
-                onClick={() => onScopeChange('ALL')}
-                className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded-lg border border-slate-700 transition-colors flex items-center gap-1"
-              >
-                <X className="w-3 h-3 text-slate-400" />
-                <span>Back to Active Duplicates</span>
-              </button>
-            </div>
+            {/* Ignored Directories List */}
+            {ignoredDirectories && ignoredDirectories.length > 0 && (
+              <div className="pt-2 border-t border-slate-800/80 flex flex-wrap items-center gap-2">
+                <span className="text-[11px] font-semibold text-slate-400 flex items-center gap-1 shrink-0">
+                  <FolderX className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Ignored Directories ({ignoredDirectories.length}):</span>
+                </span>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {ignoredDirectories.map((dir) => (
+                    <div
+                      key={`${dir.location_id}_${dir.directory_path}`}
+                      className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-200 text-xs font-mono"
+                    >
+                      <span
+                        className="px-1 py-0.2 rounded text-[10px] font-sans font-bold"
+                        style={{
+                          backgroundColor: `${dir.location_color || '#6366f1'}25`,
+                          color: dir.location_color || '#a5b4fc'
+                        }}
+                      >
+                        {dir.location_label || `Share ${dir.location_id}`}
+                      </span>
+                      <span className="text-amber-200 font-semibold">{dir.directory_path || '[Share Root]'}</span>
+                      <span className="text-[10px] text-slate-400 font-sans">({dir.sets_count || 0} sets)</span>
+                      {onUnignoreDirectory && (
+                        <button
+                          onClick={() => {
+                            if (confirm(`Unignore directory "${dir.directory_path || '[Root]'}" and restore its duplicate sets?`)) {
+                              onUnignoreDirectory(dir.location_id, dir.directory_path);
+                            }
+                          }}
+                          className="p-0.5 text-slate-400 hover:text-indigo-300 hover:bg-slate-800 rounded transition-colors ml-0.5 cursor-pointer"
+                          title={`Unignore directory "${dir.directory_path}" and restore its sets`}
+                        >
+                          <RotateCcw className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -954,9 +1010,21 @@ export default function DuplicateGroupsList({
                                     {/* Directory Breadcrumbs */}
                                     <td className="py-2 pr-3 align-top">
                                       {file.isRoot ? (
-                                        <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-amber-950/40 text-amber-300 border border-amber-800/50 font-mono text-[11px]">
-                                          <Folder className="w-3 h-3 text-amber-400 shrink-0" />
-                                          <span>[Share Root Folder]</span>
+                                        <div className="flex flex-wrap items-center gap-2">
+                                          <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-amber-950/40 text-amber-300 border border-amber-800/50 font-mono text-[11px]">
+                                            <Folder className="w-3 h-3 text-amber-400 shrink-0" />
+                                            <span>[Share Root Folder]</span>
+                                          </div>
+                                          {onIgnoreDirectory && (
+                                            <button
+                                              onClick={() => handleOpenIgnoreDir(file)}
+                                              className="px-2 py-0.5 bg-slate-800/90 hover:bg-amber-950 text-slate-300 hover:text-amber-200 border border-slate-700 hover:border-amber-700/80 rounded text-[10px] font-sans font-medium inline-flex items-center gap-1 transition-colors cursor-pointer"
+                                              title="Ignore duplicate sets in share root"
+                                            >
+                                              <FolderX className="w-3 h-3 text-amber-400" />
+                                              <span>Ignore Root</span>
+                                            </button>
+                                          )}
                                         </div>
                                       ) : (
                                         <div className="flex flex-wrap items-center gap-1 font-mono text-[11px]">
@@ -976,6 +1044,40 @@ export default function DuplicateGroupsList({
                                               </span>
                                             </React.Fragment>
                                           ))}
+
+                                          {/* Ignore Directory Button right next to folder path */}
+                                          {(() => {
+                                            const isDirIgnored = ignoredDirectories.some(
+                                              d => d.location_id === file.location_id && (d.directory_path === (file.dirPath || '') || (file.dirPath && file.dirPath.startsWith(d.directory_path + '/')))
+                                            );
+
+                                            if (isDirIgnored) {
+                                              return (
+                                                <span 
+                                                  className="ml-2 px-2 py-0.5 rounded bg-amber-950/60 border border-amber-800/60 text-amber-300 text-[10px] font-sans font-semibold inline-flex items-center gap-1"
+                                                  title="This directory is currently marked as ignored"
+                                                >
+                                                  <FolderX className="w-3 h-3 text-amber-400" />
+                                                  <span>Directory Ignored</span>
+                                                </span>
+                                              );
+                                            }
+
+                                            if (onIgnoreDirectory) {
+                                              return (
+                                                <button
+                                                  onClick={() => handleOpenIgnoreDir(file)}
+                                                  className="ml-2 px-2 py-0.5 bg-slate-800/90 hover:bg-amber-950 text-slate-300 hover:text-amber-200 border border-slate-700 hover:border-amber-700/80 rounded text-[10px] font-sans font-medium inline-flex items-center gap-1 transition-colors cursor-pointer"
+                                                  title={`Ignore all duplicate sets in directory "${file.dirPath}"`}
+                                                >
+                                                  <FolderX className="w-3 h-3 text-amber-400" />
+                                                  <span>Ignore Directory</span>
+                                                </button>
+                                              );
+                                            }
+
+                                            return null;
+                                          })()}
                                         </div>
                                       )}
 
@@ -1043,6 +1145,15 @@ export default function DuplicateGroupsList({
                                         </button>
 
                                         {/* Action helpers */}
+                                        {onIgnoreDirectory && (
+                                          <button
+                                            onClick={() => handleOpenIgnoreDir(file)}
+                                            title={`Ignore Directory: "${file.dirPath || 'Root'}"`}
+                                            className="p-1 text-slate-400 hover:text-amber-300 hover:bg-amber-950/40 rounded transition-colors cursor-pointer"
+                                          >
+                                            <FolderX className="w-3.5 h-3.5 text-amber-400/80" />
+                                          </button>
+                                        )}
                                         <button
                                           onClick={() => handleCopyPath(file.fullPath, file.id)}
                                           title="Copy Full File Path"
@@ -1134,18 +1245,45 @@ export default function DuplicateGroupsList({
                               {/* Directory Path and Filename clearly separated */}
                               <div className="min-w-0 flex-1 flex items-center gap-2">
                                 {file.isRoot ? (
-                                  <span className="text-amber-400 font-mono text-[11px] bg-amber-950/30 px-2 py-0.5 rounded border border-amber-800/40 inline-flex items-center gap-1 shrink-0">
-                                    <Folder className="w-3 h-3 text-amber-400" />
-                                    [Root]
-                                  </span>
+                                  <div className="flex items-center gap-1.5 shrink-0">
+                                    <span className="text-amber-400 font-mono text-[11px] bg-amber-950/30 px-2 py-0.5 rounded border border-amber-800/40 inline-flex items-center gap-1">
+                                      <Folder className="w-3 h-3 text-amber-400" />
+                                      [Root]
+                                    </span>
+                                    {onIgnoreDirectory && (
+                                      <button
+                                        onClick={() => handleOpenIgnoreDir(file)}
+                                        className="px-1.5 py-0.2 bg-slate-800/80 hover:bg-amber-950/90 text-slate-400 hover:text-amber-200 border border-slate-700/70 hover:border-amber-700/70 rounded text-[9px] font-sans inline-flex items-center gap-0.5 shrink-0 transition-colors cursor-pointer"
+                                        title="Ignore duplicate sets in share root"
+                                      >
+                                        <FolderX className="w-2.5 h-2.5 text-amber-400" />
+                                        <span>Ignore Root</span>
+                                      </button>
+                                    )}
+                                  </div>
                                 ) : (
-                                  <div
-                                    className="font-mono text-slate-400 text-[11px] truncate flex items-center gap-1 cursor-pointer hover:underline"
-                                    title={`Full folder: ${file.fullDir}`}
-                                    onClick={() => onRevealExplorer(file.fullPath)}
-                                  >
-                                    <Folder className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-                                    <span className="text-slate-300 font-medium">{file.dirPath}/</span>
+                                  <div className="flex items-center gap-1 min-w-0">
+                                    <div
+                                      className="font-mono text-slate-400 text-[11px] truncate flex items-center gap-1 cursor-pointer hover:underline"
+                                      title={`Full folder: ${file.fullDir}`}
+                                      onClick={() => onRevealExplorer(file.fullPath)}
+                                    >
+                                      <Folder className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                                      <span className="text-slate-300 font-medium">{file.dirPath}/</span>
+                                    </div>
+                                    {onIgnoreDirectory && (
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleOpenIgnoreDir(file);
+                                        }}
+                                        className="px-1.5 py-0.2 bg-slate-800/80 hover:bg-amber-950/90 text-slate-400 hover:text-amber-200 border border-slate-700/70 hover:border-amber-700/70 rounded text-[9px] font-sans inline-flex items-center gap-0.5 shrink-0 transition-colors cursor-pointer"
+                                        title={`Ignore Directory: "${file.dirPath}"`}
+                                      >
+                                        <FolderX className="w-2.5 h-2.5 text-amber-400" />
+                                        <span>Ignore Dir</span>
+                                      </button>
+                                    )}
                                   </div>
                                 )}
 
@@ -1179,6 +1317,15 @@ export default function DuplicateGroupsList({
 
                               {/* Individual Action Buttons */}
                               <div className="flex items-center gap-1">
+                                {onIgnoreDirectory && (
+                                  <button
+                                    onClick={() => handleOpenIgnoreDir(file)}
+                                    title={`Ignore Directory: "${file.dirPath || 'Root'}"`}
+                                    className="p-1 text-slate-400 hover:text-amber-300 hover:bg-amber-950/40 rounded transition-colors cursor-pointer"
+                                  >
+                                    <FolderX className="w-3.5 h-3.5 text-amber-400/80" />
+                                  </button>
+                                )}
                                 <button
                                   onClick={() => handleCopyPath(file.fullPath, `row_${file.id}`)}
                                   title="Copy Full File Path"
@@ -1249,6 +1396,15 @@ export default function DuplicateGroupsList({
           </div>
         </div>
       )}
+
+      {/* Ignore Directory Modal */}
+      <IgnoreDirectoryModal
+        isOpen={!!ignoreDirModalTarget}
+        onClose={() => setIgnoreDirModalTarget(null)}
+        targetFile={ignoreDirModalTarget}
+        activeLocationIds={activeLocationIds}
+        onConfirm={onIgnoreDirectory}
+      />
     </div>
   );
 }

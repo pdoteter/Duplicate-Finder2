@@ -370,6 +370,7 @@ function findDuplicates(locationIds = [], options = {}) {
         ignoredWastedBytes
       },
       groups: [],
+      ignoredDirectories: dbService.getIgnoredDirectories(),
       totalFilteredGroups,
       page: Math.floor(offset / limit),
       pageSize: limit
@@ -520,6 +521,7 @@ function findDuplicates(locationIds = [], options = {}) {
       ignoredWastedBytes
     },
     groups: finalGroups,
+    ignoredDirectories: dbService.getIgnoredDirectories(),
     totalFilteredGroups,
     page: Math.floor(offset / limit),
     pageSize: limit

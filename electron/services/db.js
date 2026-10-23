@@ -101,9 +101,36 @@ async function initDatabase(storageDir) {
     CREATE INDEX IF NOT EXISTS idx_files_size_hash ON files(file_size, quick_hash);
     CREATE INDEX IF NOT EXISTS idx_files_ext ON files(file_extension);
     CREATE INDEX IF NOT EXISTS idx_ignored_sets_key ON ignored_sets(file_size, quick_hash);
+
+    CREATE TABLE IF NOT EXISTS ignored_directories (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      location_id INTEGER,
+      directory_path TEXT NOT NULL,
+      ignored_at TEXT NOT NULL,
+      sets_count INTEGER DEFAULT 0,
+      FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE,
+      UNIQUE(location_id, directory_path)
+    );
+    CREATE INDEX IF NOT EXISTS idx_ignored_dirs ON ignored_directories(location_id, directory_path);
   `);
 
   // Safe migrations for existing databases
+  try {
+    db.run(`
+      CREATE TABLE IF NOT EXISTS ignored_directories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        location_id INTEGER,
+        directory_path TEXT NOT NULL,
+        ignored_at TEXT NOT NULL,
+        sets_count INTEGER DEFAULT 0,
+        FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE,
+        UNIQUE(location_id, directory_path)
+      );
+    `);
+  } catch (_) {}
+  try {
+    db.run("CREATE INDEX IF NOT EXISTS idx_ignored_dirs ON ignored_directories(location_id, directory_path);");
+  } catch (_) {}
   try {
     db.run("ALTER TABLE locations ADD COLUMN is_active INTEGER DEFAULT 1;");
   } catch (_) {}
@@ -261,6 +288,7 @@ function getLocations() {
 function removeLocation(locationId) {
   execute('DELETE FROM files WHERE location_id = ?', [locationId]);
   execute('DELETE FROM ignored_files WHERE backup_location_id = ?', [locationId]);
+  execute('DELETE FROM ignored_directories WHERE location_id = ?', [locationId]);
   execute('DELETE FROM locations WHERE id = ?', [locationId]);
   scheduleSave();
 }
@@ -339,12 +367,166 @@ function unignoreSet(fileSize, quickHash) {
 
 function clearIgnoredSets() {
   execute('DELETE FROM ignored_sets');
+  execute('DELETE FROM ignored_directories');
   scheduleSave();
   return true;
 }
 
 function getIgnoredSets() {
   return queryAll('SELECT * FROM ignored_sets ORDER BY ignored_at DESC');
+}
+
+// Ignored directories tracking and operations
+function getMatchingSetsForDirectory(locationId, directoryPath, activeLocationIds = []) {
+  const normDir = (directoryPath || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  let activeIds = activeLocationIds && activeLocationIds.length > 0
+    ? activeLocationIds
+    : queryAll('SELECT id FROM locations WHERE is_active = 1').map(r => r.id);
+
+  if (locationId && !activeIds.includes(locationId)) {
+    activeIds = [...activeIds, locationId];
+  }
+
+  if (activeIds.length === 0) return [];
+
+  const activePlaceholders = activeIds.map(() => '?').join(',');
+
+  let dirCondition;
+  let params;
+
+  if (normDir === '') {
+    dirCondition = "INSTR(f.relative_path, '/') = 0";
+    params = [locationId, ...activeIds];
+  } else {
+    dirCondition = "(f.relative_path = ? OR f.relative_path LIKE ?)";
+    params = [locationId, normDir, `${normDir}/%`, ...activeIds];
+  }
+
+  const sql = `
+    SELECT 
+      f.file_size, 
+      f.quick_hash, 
+      MIN(f.file_name) as file_name,
+      COUNT(f.id) as matching_files_count
+    FROM files f
+    WHERE f.location_id = ?
+      AND ${dirCondition}
+      AND EXISTS (
+        SELECT 1 FROM files f2
+        WHERE f2.file_size = f.file_size
+          AND f2.quick_hash = f.quick_hash
+          AND f2.location_id IN (${activePlaceholders})
+          AND f2.id != f.id
+      )
+    GROUP BY f.file_size, f.quick_hash
+  `;
+
+  return queryAll(sql, params);
+}
+
+function previewIgnoreDirectory(locationId, directoryPath, activeLocationIds = []) {
+  const matching = getMatchingSetsForDirectory(locationId, directoryPath, activeLocationIds);
+  const totalFiles = matching.reduce((sum, r) => sum + (r.matching_files_count || 1), 0);
+  return {
+    setsCount: matching.length,
+    filesCount: totalFiles,
+    directoryPath: (directoryPath || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+  };
+}
+
+function ignoreDirectory(locationId, directoryPath, activeLocationIds = []) {
+  const normDir = (directoryPath || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  const matching = getMatchingSetsForDirectory(locationId, normDir, activeLocationIds);
+
+  const nowIso = new Date().toISOString();
+  db.run('BEGIN TRANSACTION;');
+  try {
+    if (matching.length > 0) {
+      const insertStmt = db.prepare(
+        'INSERT OR IGNORE INTO ignored_sets (file_size, quick_hash, file_name, ignored_at) VALUES (?, ?, ?, ?)'
+      );
+      for (const r of matching) {
+        insertStmt.run([r.file_size, r.quick_hash, r.file_name, nowIso]);
+      }
+      insertStmt.free();
+    }
+
+    const insertDirStmt = db.prepare(
+      'INSERT OR REPLACE INTO ignored_directories (location_id, directory_path, ignored_at, sets_count) VALUES (?, ?, ?, ?)'
+    );
+    insertDirStmt.run([locationId, normDir, nowIso, matching.length]);
+    insertDirStmt.free();
+
+    db.run('COMMIT;');
+  } catch (err) {
+    db.run('ROLLBACK;');
+    throw err;
+  }
+
+  scheduleSave();
+  return {
+    affectedSetsCount: matching.length,
+    directoryPath: normDir,
+    locationId
+  };
+}
+
+function unignoreDirectory(locationId, directoryPath) {
+  const normDir = (directoryPath || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+
+  let dirCondition;
+  let params;
+  if (normDir === '') {
+    dirCondition = "INSTR(relative_path, '/') = 0";
+    params = [locationId];
+  } else {
+    dirCondition = "(relative_path = ? OR relative_path LIKE ?)";
+    params = [locationId, normDir, `${normDir}/%`];
+  }
+
+  const candidateSets = queryAll(
+    `SELECT DISTINCT file_size, quick_hash FROM files WHERE location_id = ? AND ${dirCondition}`,
+    params
+  );
+
+  db.run('BEGIN TRANSACTION;');
+  try {
+    if (candidateSets.length > 0) {
+      const deleteSetStmt = db.prepare(
+        'DELETE FROM ignored_sets WHERE file_size = ? AND quick_hash = ?'
+      );
+      for (const s of candidateSets) {
+        deleteSetStmt.run([s.file_size, s.quick_hash]);
+      }
+      deleteSetStmt.free();
+    }
+
+    execute(
+      'DELETE FROM ignored_directories WHERE location_id = ? AND directory_path = ?',
+      [locationId, normDir]
+    );
+
+    db.run('COMMIT;');
+  } catch (err) {
+    db.run('ROLLBACK;');
+    throw err;
+  }
+
+  scheduleSave();
+  return {
+    restoredSetsCount: candidateSets.length,
+    directoryPath: normDir,
+    locationId
+  };
+}
+
+function getIgnoredDirectories() {
+  return queryAll(`
+    SELECT id.*, l.label as location_label, l.path as location_path, l.color as location_color 
+    FROM ignored_directories id 
+    LEFT JOIN locations l ON id.location_id = l.id 
+    ORDER BY id.ignored_at DESC
+  `);
 }
 
 // Settings
@@ -473,6 +655,10 @@ module.exports = {
   unignoreSet,
   clearIgnoredSets,
   getIgnoredSets,
+  previewIgnoreDirectory,
+  ignoreDirectory,
+  unignoreDirectory,
+  getIgnoredDirectories,
   getSetting,
   setSetting,
   getExcludedExtensions,
