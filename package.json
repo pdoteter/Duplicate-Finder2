@@ -19,7 +19,7 @@
     "network-drive",
     "sqlite"
   ],
-  "author": "",
+  "author": "Peter Luxem",
   "license": "MIT",
   "dependencies": {
     "lucide-react": "^1.16.0",
