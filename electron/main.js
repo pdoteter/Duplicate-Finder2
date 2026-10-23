@@ -192,6 +192,15 @@ function setupIpcHandlers() {
     return dbService.getIgnoredDirectories();
   });
 
+  // Keep Directory
+  ipcMain.handle('duplicates:preview-keep-directory', async (event, locationId, directoryPath, activeLocationIds) => {
+    return comparator.previewKeepDirectory(locationId, directoryPath, activeLocationIds);
+  });
+
+  ipcMain.handle('duplicates:keep-directory', async (event, locationId, directoryPath, activeLocationIds, options) => {
+    return comparator.keepDirectory(locationId, directoryPath, activeLocationIds, options);
+  });
+
   // File operations & Trashing
   ipcMain.handle('duplicates:delete-single', async (event, fileId, options) => {
     return await fileOps.deleteFile(fileId, options);

@@ -40,6 +40,10 @@ contextBridge.exposeInMainWorld('api', {
   unignoreDirectory: (locationId, directoryPath) => 
     ipcRenderer.invoke('duplicates:unignore-directory', locationId, directoryPath),
   getIgnoredDirectories: () => ipcRenderer.invoke('duplicates:get-ignored-directories'),
+  previewKeepDirectory: (locationId, directoryPath, activeLocationIds) =>
+    ipcRenderer.invoke('duplicates:preview-keep-directory', locationId, directoryPath, activeLocationIds),
+  keepDirectory: (locationId, directoryPath, activeLocationIds, options) =>
+    ipcRenderer.invoke('duplicates:keep-directory', locationId, directoryPath, activeLocationIds, options),
   getUniqueFiles: (targetLocationId, compareLocationIds, options) => 
     ipcRenderer.invoke('duplicates:unique-files', targetLocationId, compareLocationIds, options),
   getLocationsStats: (locationIds) => ipcRenderer.invoke('duplicates:stats', locationIds),

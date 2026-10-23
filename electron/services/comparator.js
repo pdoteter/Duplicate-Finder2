@@ -951,12 +951,333 @@ function computeSmartSelection(locationIds = [], ruleType = 'KEEP_DEEPEST', opti
   };
 }
 
+/**
+ * Previews the impact of keeping duplicate files in a target directory
+ * and marking copies in other directories/shares for deletion.
+ * @param {number} locationId 
+ * @param {string} directoryPath 
+ * @param {number[]} activeLocationIds 
+ */
+function previewKeepDirectory(locationId, directoryPath, activeLocationIds = []) {
+  const normDir = (directoryPath || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  const targetLocId = Number(locationId);
+
+  let activeIds = activeLocationIds && activeLocationIds.length > 0
+    ? [...activeLocationIds]
+    : dbService.queryAll('SELECT id FROM locations WHERE is_active = 1').map(r => r.id);
+
+  if (targetLocId && !activeIds.includes(targetLocId)) {
+    activeIds.push(targetLocId);
+  }
+
+  const loc = targetLocId ? dbService.queryOne('SELECT label, path, color FROM locations WHERE id = ?', [targetLocId]) : null;
+
+  if (activeIds.length === 0) {
+    return {
+      setsCount: 0,
+      keptFilesCount: 0,
+      deleteFilesCount: 0,
+      deleteBytes: 0,
+      directoryPath: normDir,
+      locationId: targetLocId,
+      locationLabel: loc ? (loc.label || loc.path) : `Share ${targetLocId}`,
+      locationPath: loc ? loc.path : ''
+    };
+  }
+
+  const activePlaceholders = activeIds.map(() => '?').join(',');
+
+  let dirCondition;
+  let params;
+  if (normDir === '') {
+    dirCondition = "INSTR(f.relative_path, '/') = 0";
+    params = [targetLocId, ...activeIds, ...activeIds];
+  } else {
+    dirCondition = "(f.relative_path = ? OR f.relative_path LIKE ?)";
+    params = [targetLocId, normDir, `${normDir}/%`, ...activeIds, ...activeIds];
+  }
+
+  const filesSql = `
+    WITH target_keys AS (
+      SELECT f.file_size, f.quick_hash
+      FROM files f
+      WHERE f.location_id = ?
+        AND ${dirCondition}
+        AND f.quick_hash IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM ignored_sets ig
+          WHERE ig.file_size = f.file_size AND ig.quick_hash = f.quick_hash
+        )
+        AND EXISTS (
+          SELECT 1 FROM files f2
+          WHERE f2.file_size = f.file_size
+            AND f2.quick_hash = f.quick_hash
+            AND f2.location_id IN (${activePlaceholders})
+            AND f2.id != f.id
+        )
+      GROUP BY f.file_size, f.quick_hash
+    )
+    SELECT 
+      f.id,
+      f.location_id,
+      f.relative_path,
+      f.file_name,
+      f.file_size,
+      f.quick_hash,
+      f.mtime
+    FROM files f
+    JOIN target_keys tk ON f.file_size = tk.file_size AND f.quick_hash = tk.quick_hash
+    WHERE f.location_id IN (${activePlaceholders})
+    ORDER BY f.file_size DESC, f.mtime DESC, f.id ASC
+  `;
+
+  const allFiles = dbService.queryAll(filesSql, params);
+  if (allFiles.length === 0) {
+    return {
+      setsCount: 0,
+      keptFilesCount: 0,
+      deleteFilesCount: 0,
+      deleteBytes: 0,
+      directoryPath: normDir,
+      locationId: targetLocId,
+      locationLabel: loc ? (loc.label || loc.path) : `Share ${targetLocId}`,
+      locationPath: loc ? loc.path : ''
+    };
+  }
+
+  const groupsMap = new Map();
+  for (const f of allFiles) {
+    const key = `${f.file_size}_${f.quick_hash}`;
+    if (!groupsMap.has(key)) {
+      groupsMap.set(key, []);
+    }
+    groupsMap.get(key).push(f);
+  }
+
+  const isFileInTargetDir = (file) => {
+    if (Number(file.location_id) !== targetLocId) return false;
+    const rel = (file.relative_path || '').replace(/\\/g, '/').replace(/^\/+/, '');
+    if (normDir === '') {
+      return !rel.includes('/');
+    }
+    return rel === normDir || rel.startsWith(normDir + '/');
+  };
+
+  let totalDeleteFiles = 0;
+  let totalDeleteBytes = 0;
+  let totalKeptFiles = 0;
+
+  for (const [key, groupFiles] of groupsMap) {
+    if (groupFiles.length <= 1) continue;
+
+    const inside = groupFiles.filter(isFileInTargetDir);
+    if (inside.length === 0) continue;
+
+    const keptFile = inside.reduce((best, f) => {
+      const depthF = (f.relative_path.match(/[/\\]/g) || []).length;
+      const depthB = (best.relative_path.match(/[/\\]/g) || []).length;
+      if (depthF > depthB) return f;
+      if (depthF === depthB && f.mtime > best.mtime) return f;
+      return best;
+    }, inside[0]);
+
+    totalKeptFiles++;
+
+    for (const f of groupFiles) {
+      if (f.id !== keptFile.id) {
+        totalDeleteFiles++;
+        totalDeleteBytes += f.file_size;
+      }
+    }
+  }
+
+  return {
+    setsCount: totalKeptFiles,
+    keptFilesCount: totalKeptFiles,
+    deleteFilesCount: totalDeleteFiles,
+    deleteBytes: totalDeleteBytes,
+    directoryPath: normDir,
+    locationId: targetLocId,
+    locationLabel: loc ? (loc.label || loc.path) : `Share ${targetLocId}`,
+    locationPath: loc ? loc.path : ''
+  };
+}
+
+/**
+ * Computes updated selection so that the duplicate file in target directory is kept,
+ * and all duplicate copies in other directories/shares are selected for deletion.
+ * @param {number} locationId 
+ * @param {string} directoryPath 
+ * @param {number[]} activeLocationIds 
+ * @param {object} options 
+ */
+function keepDirectory(locationId, directoryPath, activeLocationIds = [], options = {}) {
+  const normDir = (directoryPath || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  const targetLocId = Number(locationId);
+  const { currentSelectedIds = [] } = options;
+
+  let activeIds = activeLocationIds && activeLocationIds.length > 0
+    ? [...activeLocationIds]
+    : dbService.queryAll('SELECT id FROM locations WHERE is_active = 1').map(r => r.id);
+
+  if (targetLocId && !activeIds.includes(targetLocId)) {
+    activeIds.push(targetLocId);
+  }
+
+  if (activeIds.length === 0) {
+    return {
+      selectedFileIds: currentSelectedIds || [],
+      newlySelectedCount: 0,
+      newlySelectedBytes: 0,
+      totalSelectedCount: (currentSelectedIds || []).length,
+      affectedSetsCount: 0,
+      keptFilesCount: 0,
+      directoryPath: normDir,
+      locationId: targetLocId
+    };
+  }
+
+  const activePlaceholders = activeIds.map(() => '?').join(',');
+
+  let dirCondition;
+  let params;
+  if (normDir === '') {
+    dirCondition = "INSTR(f.relative_path, '/') = 0";
+    params = [targetLocId, ...activeIds, ...activeIds];
+  } else {
+    dirCondition = "(f.relative_path = ? OR f.relative_path LIKE ?)";
+    params = [targetLocId, normDir, `${normDir}/%`, ...activeIds, ...activeIds];
+  }
+
+  const filesSql = `
+    WITH target_keys AS (
+      SELECT f.file_size, f.quick_hash
+      FROM files f
+      WHERE f.location_id = ?
+        AND ${dirCondition}
+        AND f.quick_hash IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM ignored_sets ig
+          WHERE ig.file_size = f.file_size AND ig.quick_hash = f.quick_hash
+        )
+        AND EXISTS (
+          SELECT 1 FROM files f2
+          WHERE f2.file_size = f.file_size
+            AND f2.quick_hash = f.quick_hash
+            AND f2.location_id IN (${activePlaceholders})
+            AND f2.id != f.id
+        )
+      GROUP BY f.file_size, f.quick_hash
+    )
+    SELECT 
+      f.id,
+      f.location_id,
+      f.relative_path,
+      f.file_name,
+      f.file_size,
+      f.quick_hash,
+      f.mtime
+    FROM files f
+    JOIN target_keys tk ON f.file_size = tk.file_size AND f.quick_hash = tk.quick_hash
+    WHERE f.location_id IN (${activePlaceholders})
+    ORDER BY f.file_size DESC, f.mtime DESC, f.id ASC
+  `;
+
+  const allFiles = dbService.queryAll(filesSql, params);
+  if (allFiles.length === 0) {
+    return {
+      selectedFileIds: currentSelectedIds || [],
+      newlySelectedCount: 0,
+      newlySelectedBytes: 0,
+      totalSelectedCount: (currentSelectedIds || []).length,
+      affectedSetsCount: 0,
+      keptFilesCount: 0,
+      directoryPath: normDir,
+      locationId: targetLocId
+    };
+  }
+
+  const groupsMap = new Map();
+  for (const f of allFiles) {
+    const key = `${f.file_size}_${f.quick_hash}`;
+    if (!groupsMap.has(key)) {
+      groupsMap.set(key, []);
+    }
+    groupsMap.get(key).push(f);
+  }
+
+  const isFileInTargetDir = (file) => {
+    if (Number(file.location_id) !== targetLocId) return false;
+    const rel = (file.relative_path || '').replace(/\\/g, '/').replace(/^\/+/, '');
+    if (normDir === '') {
+      return !rel.includes('/');
+    }
+    return rel === normDir || rel.startsWith(normDir + '/');
+  };
+
+  const newSelectedSet = new Set((currentSelectedIds || []).map(Number));
+  let newlySelectedCount = 0;
+  let newlySelectedBytes = 0;
+  let affectedSetsCount = 0;
+  let keptFilesCount = 0;
+
+  for (const [key, groupFiles] of groupsMap) {
+    if (groupFiles.length <= 1) continue;
+
+    const inside = groupFiles.filter(isFileInTargetDir);
+    if (inside.length === 0) continue;
+
+    const keptFile = inside.reduce((best, f) => {
+      const depthF = (f.relative_path.match(/[/\\]/g) || []).length;
+      const depthB = (best.relative_path.match(/[/\\]/g) || []).length;
+      if (depthF > depthB) return f;
+      if (depthF === depthB && f.mtime > best.mtime) return f;
+      return best;
+    }, inside[0]);
+
+    // Ensure keptFile is NOT selected (it is kept safe)
+    if (newSelectedSet.has(keptFile.id)) {
+      newSelectedSet.delete(keptFile.id);
+    }
+
+    let hasSelectionInGroup = false;
+    for (const f of groupFiles) {
+      if (f.id !== keptFile.id) {
+        if (!newSelectedSet.has(f.id)) {
+          newSelectedSet.add(f.id);
+          newlySelectedCount++;
+          newlySelectedBytes += f.file_size;
+        }
+        hasSelectionInGroup = true;
+      }
+    }
+
+    if (hasSelectionInGroup) {
+      affectedSetsCount++;
+      keptFilesCount++;
+    }
+  }
+
+  return {
+    selectedFileIds: Array.from(newSelectedSet),
+    newlySelectedCount,
+    newlySelectedBytes,
+    totalSelectedCount: newSelectedSet.size,
+    affectedSetsCount,
+    keptFilesCount,
+    directoryPath: normDir,
+    locationId: targetLocId
+  };
+}
+
 module.exports = {
   findDuplicates,
   getUniqueFiles,
   getLocationsStats,
   computeSmartSelection,
   parseDirectoryInfo,
-  getDirectoryInsight
+  getDirectoryInsight,
+  previewKeepDirectory,
+  keepDirectory
 };
 

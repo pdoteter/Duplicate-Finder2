@@ -625,6 +625,29 @@ export default function App() {
     }
   };
 
+  const handleKeepDirectory = async (locationId, dirPath, shouldOpenDeleteModal = false) => {
+    if (!window.api?.keepDirectory) return;
+    try {
+      const res = await window.api.keepDirectory(locationId, dirPath, activeLocationIds, {
+        currentSelectedIds: Array.from(selectedFileIds)
+      });
+      setSelectedFileIds(new Set(res.selectedFileIds));
+      if (shouldOpenDeleteModal) {
+        setIsDeleteModalOpen(true);
+      } else {
+        alert(
+          `Directory Kept: "${res.directoryPath || '[Share Root Folder]'}"\n\n` +
+          `• Selected for Deletion: ${res.newlySelectedCount.toLocaleString()} duplicate files (${formatBytes(res.newlySelectedBytes)})\n` +
+          `• Kept Safe: ${res.keptFilesCount.toLocaleString()} files in this directory\n` +
+          `• Duplicate Sets Affected: ${res.affectedSetsCount.toLocaleString()}`
+        );
+      }
+    } catch (err) {
+      console.error('Failed to keep directory:', err);
+      alert(`Failed to keep directory: ${err.message}`);
+    }
+  };
+
   // Calculate selected files volume and involved locations
   const selectedStats = useMemo(() => {
     let bytes = 0;
@@ -728,6 +751,7 @@ export default function App() {
             onClearIgnoredSets={handleClearIgnoredSets}
             onIgnoreDirectory={handleIgnoreDirectory}
             onUnignoreDirectory={handleUnignoreDirectory}
+            onKeepDirectory={handleKeepDirectory}
             ignoredDirectories={duplicateData.ignoredDirectories || []}
             activeLocationIds={activeLocationIds}
           />
